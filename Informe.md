@@ -69,39 +69,39 @@ ________________________________________________________________________________
 |      |                      |                        | separado.                   |
 |------|----------------------|------------------------|-----------------------------|
 |  6   | Filtrar posts vacíos | **filter**             | Cada post se evalúa         |
-|      |                      |                        |independientemente con un    |
-|      |                      |                        |predicado booleano.          |
-|      |                      |                        |`rdd.filter(post => `        |
+|      |                      |                        | independientemente con un   |
+|      |                      |                        | predicado booleano.         |
+|      |                      |                        | `rdd.filter(post => `       |
 |      |                      |                        | `post.title.nonEmpty && `   |
-|      |                      |                        |...`. Nota: `filter` no es   |
-|      |                      |                        |`map` ni `flatMap` ni        |
-|      |                      |                        |`reduceByKey`, es su propia  |
-|      |                      |                        |Spark.                       |
+|      |                      |                        | `...`. Nota: `filter` no es |
+|      |                      |                        | `map` ni `flatMap` ni       |
+|      |                      |                        | `reduceByKey`, es su propia |
+|      |                      |                        | Spark.                      |
 |------|----------------------|------------------------|-----------------------------|
 |  7   | Cargar diccionarios  | **No encaja** (Driver +| Es lectura de archivos      |
 |      |                      | broadcast)             | pequeños de datos de        |
-|      |                      |                        |referencia. Se carga en el   |
-|      |                      |                        |driver y se distribuye como  |
-|      |                      |                        |broadcast variable. No opera |
-|      |                      |                        |sobre el RDD.                |
+|      |                      |                        | referencia. Se carga en el  |
+|      |                      |                        | driver y se distribuye como |
+|      |                      |                        | broadcast variable. No opera|
+|      |                      |                        | sobre el RDD.               |
 |------|----------------------|------------------------|-----------------------------|
 |  8   | Detectar entidades   | **flatMap**            | Cada post produce 0 o más   |
-|      |                      |                        |entidades detectadas         |
-|      |                      |                        |(cantidad variable).         |
-|      |                      |                        |`rdd.flatMap(post =>`        |
-|      |                      |                        |`detectEntities(post, `      |
+|      |                      |                        | entidades detectadas        |
+|      |                      |                        | (cantidad variable).        |
+|      |                      |                        | `rdd.flatMap(post =>`       |
+|      |                      |                        | `detectEntities(post, `     |
 |      |                      |                        | `dictBroadcast.value))`     |
 |------|----------------------|------------------------|-----------------------------|
 |  9   | Contar entidades     | **map + reduceByKey**  |Primero un `map` para generar|
-|      |                      |                        |pares clave-valor:           |
+|      |                      |                        | pares clave-valor:          |
 |      |                      |                        |`rdd.map(e =>((e.entityType,`|
-|      |                      |                        |`e.text), 1))`, luego un     |
-|      |                      |                        |`reduceByKey(_ + _)` para    |
-|      |                      |                        |sumar los conteos.           |
+|      |                      |                        | `e.text), 1))`, luego un    |
+|      |                      |                        | `reduceByKey(_ + _)` para   |
+|      |                      |                        | sumar los conteos.          |
 |------|----------------------|------------------------|-----------------------------|
 |  10  | Ranking top-K        | **No encaja** (Driver) | Es una **acción**           |
-|      |                      |                        |(`takeOrdered` o `collect`   |
-|      |                      |                        |`+ sort). Requiere           |
+|      |                      |                        | (`takeOrdered` o `collect`  |
+|      |                      |                        | `+ sort`). Requiere         |
 |      |                      |                        |recolectar datos en el driver|
 |      |                      |                        |para ordenarlos globalmente y|
 |      |                      |                        |mostrar el resultado. No es  |
