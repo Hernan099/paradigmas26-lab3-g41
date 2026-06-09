@@ -41,14 +41,14 @@ object Main {
       Iterator(post(0))}
   }
 
-    // Count feed successes/failures
-    val feedsSuccess = downloadResults.count(_._1)
-    val feedsFailed = downloadResults.length - feedsSuccess
+    // Count feed successes/failures lo hacemos con lo que tenemos
+    val feedsSuccess = subscriptions.count()
+    val feedsFailed = subscriptionOpts.count() - subscriptions.count()
 
     // Flatten all posts and count JSON parse failures
-    val allPosts = downloadResults.flatMap(_._2)
-    val postsSuccess = allPosts.length
-    val postsFailed = downloadResults.count(_._2.isEmpty)
+    //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
+    val postsSuccess = downloadResults.count() 
+    val postsFailed = subscripcion.count() - downloadResults.count()
 
     // Filter empty posts
     val filteredPosts = Analyzer.filterEmptyPosts(allPosts)
