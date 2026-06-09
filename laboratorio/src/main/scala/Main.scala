@@ -1,3 +1,4 @@
+import org.apache.spark.sql.SparkSession
 object Main {
   def main(args: Array[String]): Unit = {
     // Parse command-line arguments
@@ -5,19 +6,40 @@ object Main {
       case Some(parsed) => parsed
       case None => return // scopt prints error messages
     }
+    //creamos una Sparck sesion de forma local
+    val spark = SparkSession.builder()
+  .appName("RedditNER")
+  .master("local[*]")
+  .getOrCreate()
 
-    // Load subscriptions
-    val subscriptionOpts = FileIO.readSubscriptions(cmdArgs.subscriptionFile)
+  val sc = spark.sparkContext
 
-    // Filter out malformed subscriptions (None values)
-    val subscriptions = subscriptionOpts.flatten
 
-    // Download feeds and parse posts, tracking success/failure
-    val downloadResults = subscriptions.map { subscription =>
-      val feedOpt = FileIO.downloadFeed(subscription.url)
-      val posts = feedOpt.fold(List[Post]())(JsonParser.parsePosts(_, subscription.name))
-      (feedOpt.isDefined, posts)
+    // Load subscriptions usado spark, esto es lo que crea el rdd
+    val subscriptionOpts = sc.parallelize(FileIO.readSubscriptions(cmdArgs.subscriptionFile))
+
+    // Filter out malformed subscriptions (None values), como usamos rdd, ahora lo hacemos con flatmap, Iterador es el tipo de dato que usa flatmap para 
+    // iterar sobre los objetos de rdd, cuando hacemos iterador.empty lo que decimos es: no metas nada, en la logica de la funcion, si algun campo tiene none, no lo incluyas, else incluilo 
+    val subscriptions:RDD[Subscription] = subscriptionOpts.flatMap {
+      sub => if (sub.name == None || sub.url == None) {
+        Iterator.empty
+      }
+      else{
+        Iterator(sub)
+      }
     }
+
+    // Download feeds and parse posts, tracking success/failure , como lo estamos paralelizando con flatmap, lo que hacemos es:
+    //para cada subscripcion, la descargamos, luego, si esta no tiene nada, ponemos iterador.empty, si si tiene algo, sumamos
+    //el contenido parceado
+    val downloadResults = subscriptions.flatMap { subscription =>
+      val feedOpt = FileIO.downloadFeed(subscription.url)
+      val post = feedOpt.fold(List[Post]())(JsonParser.parsePosts(_, subscription.name))
+      if (post.isEmpty){
+        Iterator.empty
+      } else {
+      Iterator(post(0))}
+  }
 
     // Count feed successes/failures
     val feedsSuccess = downloadResults.count(_._1)
