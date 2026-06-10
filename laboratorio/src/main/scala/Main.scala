@@ -23,8 +23,8 @@ object Main {
     // iterar sobre los objetos de rdd, cuando hacemos iterador.empty lo que decimos es: no metas nada, en la logica de la funcion, si algun campo tiene none, no lo incluyas, else incluilo 
     val feedAcum = sc.longAccumulator("succesful feed")
     val failFeedAcum = sc.longAccumulator("failed feed")
-    val subscriptions:RDD[Subscription] = subscriptionOpts.flatMap {
-      sub => if (sub.name == None || sub.url == None) {
+    val subscriptions = subscriptionOpts.flatMap {
+      sub => if (sub == None) {
         failFeedAcum.add(1)
         Iterator.empty
       }
@@ -63,8 +63,8 @@ object Main {
     val postsFailed = subscripcion.count() - downloadResults.count()
     println(failPostAcum.value)
     // Filter empty posts
-    val filteredPosts = Analyzer.filterEmptyPosts(allPosts)
-    val postsFiltered = allPosts.length - filteredPosts.length
+    val filteredPosts = Analyzer.filterEmptyPosts(postsSuccess)
+    val postsFiltered = postsSuccess.length - filteredPosts.length
     
 
     // Calculate average characters in filtered posts
@@ -111,10 +111,10 @@ object Main {
   //EJERCICIO 3
 
   //Encuentro las entidades y genero un nuevo RDD con las entidades completas, es decir, titulo + texto
-  val entidades = downloadResults.flatMap( post => 
-    val postCompleto = post.title + " " + post.selftext
-
-    //Generamos un RDD[NamedEntity]
-    Analyzer.downloadResults(postCompleto,dictionary))
+  //val entidades = downloadResults.flatMap( post => 
+  //  val postCompleto = post.title + " " + post.selftext
+  //
+  //  //Generamos un RDD[NamedEntity]
+  //  Analyzer.downloadResults(postCompleto,dictionary))
   
 }
