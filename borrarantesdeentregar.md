@@ -525,3 +525,27 @@ La clave fue aplicar estas tres preguntas a cada paso:
 ```
 
 ---
+
+# Explicación paso a paso — Ejercicio 1d
+
+## Cómo llegué a la conclusión sobre las restricciones de Spark
+
+### El planteo del problema
+El problema pregunta qué restricciones impone Spark sobre las funciones proporcionadas por el usuario (los closures que se pasan a `map`, `filter`, `reduceByKey`, etc.) considerando que se ejecutarán en un entorno distribuido, haciendo énfasis en tres áreas teóricas fundamentales: **serialización**, **estado compartido** y **efectos secundarios**.
+
+Para responder esto la premisa a adoptar en tu cabeza es: **Dejar de pensar como si ejecutaras el proceso de la lista en un for-loop en tu computadora**, y abstraerse en el **modelo de ejecución distribuida**.
+
+### 1. Serialización
+**Qué deberías entender teóricamente:** La diferencia y separación de espacio entre Driver y Workers y cómo se transporta la carga de un lugar a otro.
+El código de la aplicación se inicializa en un proceso principal ("Driver", ej. el script central enviando desde tu PC). Pero los datos a procesar (RDD) están repartidos en varios nodos ("Workers"). Cuando escribes en tu driver `rdd.map(x => x + miVariableExterna)`, Spark necesita aislar ese bloque de código `x => x + miVariableExterna`, empaquetarlo, mandarlo por la red (TCP) para que los workers hagan el trabajo con los datos locales a ellos.
+**Cómo resolverlo:** ¿Cómo viaja un objeto instanciado en Java por la red hacia otra memoria y reconstruye su forma? Por medio de la **Serialización** (proceso de transformar un objeto a bits transportables). Entonces, la primera restricción recae en que **todo el código (y por consecuencia natural cada variable u objeto externo que "atrape" tu bloque lógico) obligatoriamente debe ser Serializable**. Si ese closure atrapa algo como una conexión HTTP, variables no inicializadas correctamente, o conexiones JDBC, Spark te castigará tirando un clásico `NotSerializableException` antes de arrancar.
+
+### 2. Estado Compartido (Shared State)
+**Qué deberías entender teóricamente:** El aislamiento y asincronía de memoria RAM.
+Cuando usas variables locales e integras un contador como `var counter = 0; rdd.foreach(x => { counter += 1; ... })`, Spark debe serializar el contador local e introducir eso al empaque del closure. Lo envía. 
+**Cómo resolverlo:** Cada worker, en su RAM apartada e independiente del cluster, recibe y tiene ahora **su propia y apartada copia** de la memoria local, no es el mismo puntero al objeto raíz original (no hay apuntadores compartidos a distancia). Cuando un worker incremente el contador, actualizará en 1 "su versión". Ningún otro cluster ni el creador (el driver principal) conocerá de esta acción y `counter` seguirá arrojando valiendo `0` en la fase final; para Spark compartir mutuamente y retornar estas combinaciones se hace vía *Variables Acumuladores*. Por tanto la conclusión es **ausencia total de estado compartido mutado por el usuario**, no se mutan variables globales si la intención de esas variables depende de que la operación las sume distribuidamente, pues la sumará localmente.
+
+### 3. Efectos Secundarios (Side Effects)
+**Qué deberías entender teóricamente:** La cualidad de Resiliencia a las fallas (Tolerenacia a Fallas y Linaje).
+El framework existe para la escalabilidad: asume por fondo que con cientos de computadores, alguna PC o conexión siempre va a fallar antes de tener el proceso terminado. Si el Worker 3 se quema por la mitad de un `map`, Spark no tumba toda tu Big Data. Retoma de su Lineage (su plan de pasos guardado en memoria) y ordena repetir y regenerar a Worker 4 lo que Worker 3 iba logrando. Más allá del daño, cuenta con que si Worker 1 avanza lento, enciende un proceso idéntico especulativo a procesar junto a la par a ver cuál llega más rápido y descartará un avance idéntico al otro. 
+**Cómo resolverlo:** Asumiendo que tu función base, ej: `map(x => notificarUsuarioPorMail(x))`, en casos normales de hardware dañado un fragmento de tu mapeo fue procesado 1,5 o incluso tres veces por un nodo, se enviaron tres correos repitiendo y duplicando los problemas para tus clientes. Ante ello, la restricción final a concluir es que las extensiones deben abstenerse estrictamente a ser **Puramente Idempotentes** en acciones a ser tomadas sin sufrir cambios (es decir una función "pura" donde procesar una o tres veces conllevan el mismo resultado en vez del crecimiento constante). No deberías causar efectos desde transformaciones, sólo al final, en bloques dedicados de salida cuidando atomicidades.
