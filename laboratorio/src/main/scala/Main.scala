@@ -1,5 +1,6 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.rdd.RDD
+import java.util.Formatter
 object Main {
   def main(args: Array[String]): Unit = {
     // Parse command-line arguments
@@ -121,5 +122,29 @@ object Main {
   //
   //  //Generamos un RDD[NamedEntity]
   //  Analyzer.downloadResults(postCompleto,dictionary))
+  
+}
+
+  val entidades = downloadResults.flatMap( post =>{
+    val postCompleto = post.title + " " + post.selftext
+
+    //Generamos un RDD[NamedEntity]
+    val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})
+  
+  //Convertimos cada NamedEntity en un mapeo ((tipo,name) 1) para agrupar y sumar luego
+  val mapedPost = entidades.map( post => ((post.entityType, post.text), 1))
+
+  //Sumamos el 1 de ada entidad mapeada agrupando por tipo
+  val entityCount = mapedPost.reduceByKey( _ + _)
+
+
+  // RDD[(tipo,nombre), cantidad]
+  val orderEntity = entityCount.sortBy(e => (e._2, e._1._1), false)
+
+  println(Formatters.formatEntityStats(orderEntity))
+
+  //FIN EJERCICIO 3
+
+
   
 }

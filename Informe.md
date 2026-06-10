@@ -150,3 +150,28 @@ Al final del pipeline es cuando spark recopila la informacion que hay en un accu
 
 ### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
 
+
+
+## Ejercicio 3: Paralelización del computo de entidades
+
+### Barreras de sincronización
+   `reduceByKey constituye una barrera de sincronización porque Spark debe reunir todos los valores asociados a una misma clave para poder combinarlos. Durante este proceso los datos son redistribuidos entre los workers mediante un shuffle. Como Spark puede combinar los valores en distintos órdenes y en distintas particiones, la función utilizada debe ser asociativa y conmutativa. Estas propiedades garantizan que el resultado final sea correcto independientemente de cómo Spark distribuya y reorganice el trabajo entre los workers.
+
+### Diccionario de entidades
+   El diccionario de entidades es serializado por Spark y distribuído a los workers para que puedan usarlo para clasificar y extraer entidades. Esto evita que cada worker deba cargar su propio diccionario desde 0.
+
+   Ocurre aquí: \
+   `val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)`\
+   `val entidades = downloadResults.flatMap( post =>{`\
+   `val postCompleto = post.title + " " + post.selftext`\
+   `val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})`
+
+## Ejercicio 4: Monitoreo del exito de las tareas
+
+### a_ ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline? ¿En qué situación un Accumulator puede dar un valor incorrecto?
+
+Porque cada worker modifica los acumuladores de a uno generando que si uno lo revisa durante la ejecucion quizas acceda a informacion que ya no se corresponde con el momento donde se realiza la accion logica o el valor obtenido no es el correcto para la accion que se quiere realizar. Por ejemplo si un dos workers a y b cuentan sus elementos bien parseados pero a es mas rapido que b. Entonces a al terminar por ejemplo a la mitad de la ejecucion de b llama la informacion guardada en el accumulator se encontraria con lo siguiente: #(bien parseados a) + #(bien parseados b)/2 Luego cuando b termine si llama la informacion encontraira #(bien parseados a) + #(bien parseados b) En este caso ni a ni b pueden asegurar que la informacion obtenida sea la correcta en el momento que se ejecutaron.
+### b_ ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
+Al final del pipeline es cuando spark recopila la informacion que hay en un accumulator y la entrega al driver para que pueda leerla.
+
+### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
