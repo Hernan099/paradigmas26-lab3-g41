@@ -11,13 +11,13 @@
   Cada Worker toma sus asignaciones, abre la conexión a la URL externa (HTTP), descarga el contenido y decodifica localmente su propio documento JSON, aplanando los datos útiles para producir una secuencia de Posts.
 
 **Paso 3 — Extracción de entidades**
-  Cada Worker recorre el texto de sus Posts locales, consultando un diccionario auxiliar distribuido previamente ("broadcast"), en búsqueda de coincidencias limpiadas para arrojar una lista de menciones de Entidades.
+  Cada Worker recorre el texto de sus Posts locales, consultando un diccionario auxiliar, en búsqueda de coincidencias limpiadas para arrojar una lista de menciones de Entidades.
 
 **Paso 4 — Clasificación**
   Cada Worker reempaqueta cada mención de entidad asignándole un valor base de ocurrencia matemática, dejándola estandarizada mediante una clave primaria (`TipoDeEntidad, NombreDeLaEntidad`) lista para la fase de reducción.
 
 **Paso 5 — Conteo**
-  Los Workers entablan comunicación cruzada (Shuffle) por la red local del cluster para reagrupar todas las coincidencias atadas por la misma clave y reducir (sumar matemáticamente) sus contadores iterativamente hasta que el cluster concuerde los conteos unificados de cada entidad.
+  Los Workers entablan comunicación cruzada por la red local del cluster para reagrupar todas las coincidencias atadas por la misma clave y reducir sus contadores iterativamente hasta que el cluster concuerde los conteos unificados de cada entidad.
 
 **Paso 6 — Ranking**
   El Driver envía una orden terminal a los workers: se trae (recolecta) los contadores consolidados devueltos del Paso 5 e interrumpe el paralelismo, ordenándolos él mismo en su hilo principal de forma global para extraer las más repetidas a pantalla.
@@ -113,19 +113,19 @@ ________________________________________________________________________________
 
 #### ¿Por qué las barreras son necesarias?
 
-**El Paso de Conteo (Paso 5) es una barrera:** Spark invoca para la agrupación y suma una **Wide Dependency**; no se puede declarar contada en total a la entidad "Scala = 5 veces" usando un solo worker parcial, pues esa entidad bien podría ser el output disperso en N workers en otros servidores. Para sumarlos y contar, este paso bloqueante inicia **un Shuffle** por red, enviando todos los registros de la misma clave esparcidos dispersos para que aterricen en el mismo worker reductor que se encargará materialmente de sumarlo. El reductor no puede enviar respuesta sin estar totalmente seguro que todos terminaron de emitir sus extracciones.
+**El Paso de Conteo (Paso 5) es una barrera:** Spark invoca para la agrupación y suma una Wide Dependency; no se puede declarar contada en total a la entidad "Scala = 5 veces" usando un solo worker parcial, pues esa entidad bien podría ser el output disperso en N workers en otros servidores. Para sumarlos y contar, este paso bloqueante inicia un Shuffle por red, enviando todos los registros de la misma clave esparcidos dispersos para que aterricen en el mismo worker reductor que se encargará materialmente de sumarlo. El reductor no puede enviar respuesta sin estar totalmente seguro que todos terminaron de emitir sus extracciones.
 
 **El Paso de Ranking (Paso 6) es una barrera:** Como driver que dictamina fin de pipeline, recoger absolutos unificados mediante `collect` u ordenarlos globalmente de todo el cluster es una detención del ciclo paralelo para un retorno sincrónico y secuencial con el script en consola.
 
 #### ¿Por qué los demás pasos NO son barreras?
 
-Los pasos de **Descarga (2)**, **Extracción (3)**, y **Clasificación (4)** conforman el grupo de transformaciones **Narrow** (estrechas). Su regla principal asegura que: cada partición producida de cálculos derivan únicamente del input de la misma partición y nada más. Cada Worker transcurre operando su listado local a su ritmo individual libre de esperas sobre los estados de las particiones del resto.
+Los pasos de **Descarga (2)**, **Extracción (3)**, y **Clasificación (4)** conforman el grupo de transformaciones estrechas. Su regla principal asegura que: cada partición producida de cálculos derivan únicamente del input de la misma partición y nada más. Cada Worker transcurre operando su listado local a su ritmo individual libre de esperas sobre los estados de las particiones del resto.
 
 ---
 
 ### d_ Restricciones sobre las funciones de extensión en Spark
 
-En Spark, el mecanismo principal de extensión son las funciones que el desarrollador provee a operaciones como `map`, `flatMap`, `filter` y `reduceByKey`. Dado que estas funciones se definen en el programa principal pero se ejecutan en los nodos de cómputo (workers) de un entorno distribuido, Spark impone o asume ciertas restricciones críticas sobre ellas para garantizar un correcto funcionamiento:
+En Spark, el mecanismo principal de extensión son las funciones que el desarrollador provee a operaciones como `map`, `flatMap`, `filter` y `reduceByKey`. Dado que estas funciones se definen en el programa principal pero se ejecutan en los workers de un entorno distribuido, Spark impone o asume ciertas restricciones críticas sobre ellas para garantizar un correcto funcionamiento:
 
 1. **Serialización**:
    - **Restricción**: Toda la función (como closure) y cualquier variable de su entorno léxico que referencie internamente, debe ser serializable.
@@ -174,10 +174,10 @@ Al final del pipeline es cuando spark recopila la informacion que hay en un accu
 ### a_ Recomputaciones innecesarias y la falta de cache()
 
 **Puntos del código donde se recomputa innecesariamente:**
-Se recomputa un esfuerzo distribuido de forma innecesaria cada vez que disparamos acciones terminales como `.count()`, `.isEmpty()` o `.collect()` sobre los tres RDDs troncales principales (`subscriptions`, `downloadResults`, y `filteredPosts`) con tal de obtener valores aislados de métricas a imprimir (como sumar variables aisladas por error tales como `postsFailed`, `filteredPosts` o `feedsSuccess` restando y pidiendo un conteo a la vez). Al no indicar retención explícita en RAM (cache), Spark libera el bloque procesado y el pipeline "olvida y suelta" el cálculo anterior por cada línea que ejecutas luego.
+Se recomputa un esfuerzo distribuido de forma innecesaria cada vez que disparamos acciones terminales como `.count()`, `.isEmpty()` o `.collect()` sobre los tres RDDs troncales principales (`subscriptions`, `downloadResults`, y `filteredPosts`) con tal de obtener valores aislados de métricas a imprimir (como sumar variables aisladas por error tales como `postsFailed`, `filteredPosts` o `feedsSuccess` restando y pidiendo un conteo a la vez). Al no indicar retención explícita en RAM (cache), Spark libera el bloque procesado y el pipeline olvida el cálculo anterior por cada línea que se ejecuta luego.
 
 **¿Qué ocurriría si no llamaran a cache()?**
-Debido al diseño base de Apache Spark donde las transformaciones son *perezosas* (Lazy Evaluation), si no invocamos la persistencia `cache()` sobre un RDD (que en nuestro diseño particular nos cuesta costosos tiempos de red I/O y fuerte carga de CPU al decodificar JSON), Spark no resguardará la respuesta temporal. Por consiguiente, ante cada invocación de Acción aguas abajo que requiera del pipeline, el manejador desechará cualquier milagro de velocidad y reconstruirá el DAG por rigor volviendo todo su linaje hacia atrás. Esto provoca rehacer a repetición el recorrido base en los drivers (`sc.parallelize()`), incluyendo gatillar otra docenas de aperturas remotas HTTP para *volver a pedir y decodificar* los mismos portales a Reddit infinitas veces.
+Debido al diseño base de Apache Spark donde las transformaciones son *perezosas* (Lazy Evaluation), si no se invoca la persistencia `cache()` sobre un RDD, Spark no resguardará la respuesta temporal. Por consiguiente, ante cada invocación de Acción aguas abajo que requiera del pipeline, el manejador desechará cualquier milagro de velocidad y reconstruirá el DAG por rigor volviendo todo su linaje hacia atrás. Esto provoca rehacer a repetición el recorrido base en los drivers (`sc.parallelize()`), incluyendo gatillar otra docenas de aperturas remotas HTTP para volver a pedir y decodificar los mismos portales a Reddit infinitas veces.
 
 **¿Cuántas veces se ejecutaría la descarga de feeds?**
 La descarga se activa a partir del método asociado sobre el `downloadResults`, y esta dependencia es heredada en cascada atando permanentemente a `filteredPosts` y a `allEntities`. 
