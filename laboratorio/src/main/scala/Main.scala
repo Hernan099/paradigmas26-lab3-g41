@@ -12,6 +12,7 @@ object Main {
   .master("local[*]")
   .getOrCreate()
 
+
   val sc = spark.sparkContext
 
 
@@ -20,11 +21,15 @@ object Main {
 
     // Filter out malformed subscriptions (None values), como usamos rdd, ahora lo hacemos con flatmap, Iterador es el tipo de dato que usa flatmap para 
     // iterar sobre los objetos de rdd, cuando hacemos iterador.empty lo que decimos es: no metas nada, en la logica de la funcion, si algun campo tiene none, no lo incluyas, else incluilo 
+    val feedAcum = sc.longAccumulator("succesful feed")
+    val failFeedAcum = sc.longAccumulator("failed feed")
     val subscriptions:RDD[Subscription] = subscriptionOpts.flatMap {
       sub => if (sub.name == None || sub.url == None) {
+        failFeedAcum.add(1)
         Iterator.empty
       }
       else{
+        feedAcum.add(1)
         Iterator(sub)
       }
     }
@@ -32,24 +37,31 @@ object Main {
     // Download feeds and parse posts, tracking success/failure , como lo estamos paralelizando con flatmap, lo que hacemos es:
     //para cada subscripcion, la descargamos, luego, si esta no tiene nada, ponemos iterador.empty, si si tiene algo, sumamos
     //el contenido parceado
+    val postAcum = sc.longAccumulator("succesful posts")
+    val failPostAcum = sc.longAccumulator("failed feed")
     val downloadResults = subscriptions.flatMap { subscription =>
       val feedOpt = FileIO.downloadFeed(subscription.url)
       val post = feedOpt.fold(List[Post]())(JsonParser.parsePosts(_, subscription.name))
       if (post.isEmpty){
+        failPostAcum.add(1)
         Iterator.empty
       } else {
-      Iterator(post(0))}
-  }
+        postAcum.add(1)
+        Iterator(post(0))
+      }
+    }
 
     // Count feed successes/failures lo hacemos con lo que tenemos
     val feedsSuccess = subscriptions.count()
+    println(feedAcum.value)
     val feedsFailed = subscriptionOpts.count() - subscriptions.count()
-
+    println(failFeedAcum.value)
     // Flatten all posts and count JSON parse failures
     //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
     val postsSuccess = downloadResults.count() 
+    println(postAcum.value)
     val postsFailed = subscripcion.count() - downloadResults.count()
-
+    println(failPostAcum.value)
     // Filter empty posts
     val filteredPosts = Analyzer.filterEmptyPosts(allPosts)
     val postsFiltered = allPosts.length - filteredPosts.length
