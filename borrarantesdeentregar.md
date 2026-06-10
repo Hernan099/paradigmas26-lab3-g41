@@ -486,3 +486,42 @@ La clave fue aplicar estas tres preguntas a cada paso:
 | **Independiente entre workers** | 3, 4, 5, 6, 8 | Transformaciones narrow, sin shuffle |
 | **Barrera de sincronización** | 9, 10 | Requieren shuffle (9) o acción (10) |
 
+---
+
+#### Resumen visual
+
+```
+  Driver (secuencial)         Workers (paralelo)         Barreras
+  ═══════════════════         ══════════════════         ════════
+  ┌─────────────────┐
+  │ 1. Leer subs    │
+  │ 2. Filtrar subs │
+  └────────┬────────┘
+           │ sc.parallelize(...)
+           ▼
+                        ┌────────────────────────┐
+                        │ 3. Descargar (map)     │──── Independiente
+                        │ 4. Parsear (flatMap)   │──── Independiente
+                        │ 5. Aplanar (implícito) │──── Independiente
+                        │ 6. Filtrar (filter)    │──── Independiente
+                        └────────────────────────┘
+  ┌─────────────────┐            │
+  │ 7. Cargar dict  │────broadcast──→ todos los workers
+  └─────────────────┘            │
+                        ┌────────────────────────┐
+                        │ 8. Detectar entidades  │──── Independiente
+                        │    (flatMap)           │
+                        └────────┬───────────────┘
+                                 │
+                        ╔════════╧════════════════╗
+                        ║ 9. Contar entidades     ║──── BARRERA (shuffle)
+                        ║    (reduceByKey)        ║      Todos los workers deben
+                        ╚════════╤════════════════╝     emitir antes de reducir
+                                 │
+                        ╔════════╧════════════════╗
+                        ║ 10. Ranking top-K       ║──── BARRERA (acción)
+                        ║    (collect/takeOrdered)║      Todos deben terminar
+                        ╚═════════════════════════╝     antes de recolectar
+```
+
+---

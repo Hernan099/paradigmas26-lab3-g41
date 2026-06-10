@@ -177,7 +177,7 @@ ________________________________________________________________________________
 |      |                           |                          |variable local. No necesita|
 |      |                           |                          |datos de otros workers.    |
 |------|---------------------------|--------------------------|---------------------------|
-|  9   | Contar entidades          |**🚧 BARRERA 🚧**        | `reduceByKey` implica un  |
+|  9   | Contar entidades          |**BARRERA**               | `reduceByKey` implica un  |
 |      | (map + reduceByKey)       |                          |**shuffle**: los datos se  |
 |      |                           |                          |redistribuyen por clave    |
 |      |                           |                          |entre todos los workers.   |
@@ -190,7 +190,7 @@ ________________________________________________________________________________
 |      |                           |                          |**barrera de               |
 |      |                           |                          |sincronización**.          |
 |------|---------------------------|--------------------------|---------------------------|
-|  10  | Ranking top-K             |**🚧 BARRERA 🚧**        | `collect`/`takeOrdered`   |
+|  10  | Ranking top-K             |**BARRERA**               | `collect`/`takeOrdered`   |
 |      | (acción)                  |                          |es una **acción** que      |
 |      |                           |                          |requiere que TODOS los     |
 |      |                           |                          |workers terminen el paso 9 |
@@ -200,45 +200,6 @@ ________________________________________________________________________________
 |      |                           |                          |parcial sin visión global. |
 |______|___________________________|__________________________|___________________________|
 
----
-
-#### Resumen visual
-
-```
-  Driver (secuencial)         Workers (paralelo)         Barreras
-  ═══════════════════         ══════════════════         ════════
-  ┌─────────────────┐
-  │ 1. Leer subs    │
-  │ 2. Filtrar subs │
-  └────────┬────────┘
-           │ sc.parallelize(...)
-           ▼
-                        ┌────────────────────────┐
-                        │ 3. Descargar (map)     │──── Independiente
-                        │ 4. Parsear (flatMap)   │──── Independiente
-                        │ 5. Aplanar (implícito) │──── Independiente
-                        │ 6. Filtrar (filter)    │──── Independiente
-                        └────────────────────────┘
-  ┌─────────────────┐            │
-  │ 7. Cargar dict  │────broadcast──→ todos los workers
-  └─────────────────┘            │
-                        ┌────────────────────────┐
-                        │ 8. Detectar entidades  │──── Independiente
-                        │    (flatMap)           │
-                        └────────┬───────────────┘
-                                 │
-                        ╔════════╧════════════════╗
-                        ║ 9. Contar entidades     ║──── 🚧 BARRERA (shuffle)
-                        ║    (reduceByKey)        ║      Todos los workers deben
-                        ╚════════╤════════════════╝     emitir antes de reducir
-                                 │
-                        ╔════════╧════════════════╗
-                        ║ 10. Ranking top-K       ║──── 🚧 BARRERA (acción)
-                        ║    (collect/takeOrdered)║      Todos deben terminar
-                        ╚═════════════════════════╝     antes de recolectar
-```
-
----
 
 #### ¿Por qué las barreras son necesarias?
 
