@@ -44,15 +44,17 @@ object Main {
     //el contenido parceado
     val postAcum = sc.longAccumulator("succesful posts")
     val failPostAcum = sc.longAccumulator("failed feed")
+    // REQUISITO B: flatMap que descarga feeds y devuelve TODOS los posts (no solo el primero)
     val downloadResults = subscriptions.flatMap { subscription =>
       val feedOpt = FileIO.downloadFeed(subscription.url)
-      val post = feedOpt.fold(List[Post]())(JsonParser.parsePosts(_, subscription.name))
-      if (post.isEmpty){
+      val posts = feedOpt.fold(List[Post]())(JsonParser.parsePosts(_, subscription.name))
+
+      if (posts.isEmpty){
         failPostAcum.add(1)
         Iterator.empty
       } else {
         postAcum.add(1)
-        Iterator(post(0))
+        posts.iterator  // <-- CAMBIO: Devuelve TODOS los posts con .iterator
       }
     }
 
