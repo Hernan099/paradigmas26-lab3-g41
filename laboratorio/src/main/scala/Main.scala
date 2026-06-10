@@ -1,6 +1,6 @@
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.rdd.RDD
-import java.util.Formatter
+import java.io.File
 object Main {
   def main(args: Array[String]): Unit = {
     // Parse command-line arguments
@@ -17,19 +17,27 @@ object Main {
 
     val sc = spark.sparkContext
 
+    // ERROR HANDLING: Load subscriptions con try-catch para manejo de errores de archivo
+    val subscriptionOpts = try {
+      sc.parallelize(FileIO.readSubscriptions(cmdArgs.subscriptionFile))
+    } catch {
+      case _: java.io.FileNotFoundException =>
+        println(s"Error: Could not load ${cmdArgs.subscriptionFile} - file not found")
+        return
+      case _: Exception =>
+        println(s"Error: Could not load ${cmdArgs.subscriptionFile} - invalid JSON format")
+        return
+    }
 
-    // Load subscriptions usado spark, esto es lo que crea el rdd
-    val subscriptionOpts = sc.parallelize(FileIO.readSubscriptions(cmdArgs.subscriptionFile))
-
-    // Filter out malformed subscriptions (None values), como usamos rdd, ahora lo hacemos con flatmap, Iterador es el tipo de dato que usa flatmap para 
-    // iterar sobre los objetos de rdd, cuando hacemos iterador.empty lo que decimos es: no metas nada, en la logica de la funcion, si algun campo tiene none, no lo incluyas, else incluilo 
-    //aca commit a1233fd cambie la logica de la funcion porque suscription es un option, entonces use cases para que si es some ahga algo y si es none haga otra cosa    
-        val feedAcum = sc.longAccumulator("succesful feed")
-        val failFeedAcum = sc.longAccumulator("failed feed")
+    // Filter out malformed subscriptions (None values)
+    val feedAcum = sc.longAccumulator("succesful feed")
+    val failFeedAcum = sc.longAccumulator("failed feed")
+    
     val subscriptions: RDD[Subscription] = subscriptionOpts.flatMap {
       case Some(s) =>
         if (s.name.isEmpty || s.url.isEmpty){ 
           failFeedAcum.add(1)
+          println("Warning: Skipping malformed subscription (missing 'name' or 'url' field)")
           Iterator.empty
         }
         else {
@@ -47,14 +55,21 @@ object Main {
     // REQUISITO B: flatMap que descarga feeds y devuelve TODOS los posts (no solo el primero)
     val downloadResults = subscriptions.flatMap { subscription =>
       val feedOpt = FileIO.downloadFeed(subscription.url)
-      val posts = feedOpt.fold(List[Post]())(JsonParser.parsePosts(_, subscription.name))
-
-      if (posts.isEmpty){
-        failPostAcum.add(1)
-        Iterator.empty
-      } else {
-        postAcum.add(1)
-        posts.iterator  // <-- CAMBIO: Devuelve TODOS los posts con .iterator
+      
+      feedOpt match {
+        case None =>
+          println(s"Warning: Failed to download from '${subscription.name}' (${subscription.url})")
+          failPostAcum.add(1)
+          Iterator.empty
+        case Some(feedContent) =>
+          val posts = JsonParser.parsePosts(feedContent, subscription.name)
+          if (posts.isEmpty){
+            failPostAcum.add(1)
+            Iterator.empty
+          } else {
+            postAcum.add(1)
+            posts.iterator
+          }
       }
     }
 
@@ -63,20 +78,28 @@ object Main {
     println(feedAcum.value)
     val feedsFailed = subscriptionOpts.count() - subscriptions.count()
     println(failFeedAcum.value)
+
+    // ERROR HANDLING: Validar que hay suscripciones válidas
+    if (feedsSuccess == 0) {
+      println("Error: No valid subscriptions found")
+      return
+    }
     // Flatten all posts and count JSON parse failures
     //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
     val postsSuccess = downloadResults.count() 
     println(postAcum.value)
     val postsFailed = subscriptions.count() - downloadResults.count()
     println(failPostAcum.value)
+    
     // Filter empty posts
     val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty)
     val postsFiltered = downloadResults.count() - filteredPosts.count()
 
-    // Calculate average characters in filtered postss
-    val totalChars = filteredPosts.flatMap(post => 
-    Iterator(post.title.length + post.selftext.length))
-    val avgChars = if (!filteredPosts.isEmpty()){ totalChars.reduce(_+_) / filteredPosts.count()} else 0
+    // Calculate average characters in filtered posts
+    val kept = filteredPosts.count()
+    val totalChars: Long = if (kept == 0) 0L
+      else filteredPosts.map(post => post.title.length.toLong + post.selftext.length.toLong).reduce(_ + _)
+    val avgChars: Double = if (kept > 0) totalChars.toDouble / kept else 0.0
 
     // Prepare statistics
     val stats = Map(
@@ -99,6 +122,11 @@ object Main {
     }
 
     // Load dictionaries
+    val entitiesDir = new File(cmdArgs.entitiesDir)
+    if (!entitiesDir.exists() || !entitiesDir.isDirectory) {
+      println(s"Error: entities directory '${cmdArgs.entitiesDir}' not found")
+      return
+    }
     val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)
 
     // Detect entities in all posts (combine title and selftext)
