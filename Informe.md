@@ -140,38 +140,55 @@ En Spark, el mecanismo principal de extensión son las funciones que el desarrol
    - **Justificación**: Spark provee una robusta tolerancia a fallas. Cuando un worker falla o la red se desconecta antes de terminar su sección de procesamiento de datos, o incluso si Spark nota que un worker opera más lento que los demás (stragglers), Spark puede y va a **ejecutar de nuevo, reactivar o duplicar (especular)** ese trabajo fallido en otro worker. Ante ello, no hay garantía estricta de que tu transformación sobre un dato ejecute una única vez. Si una etapa produce resultados transaccionales, envía correos o debita dinero, un fallo provocaría que el correo se envíe en repetidas ocasiones en la repetición del bloque. Todo el trabajo final que interactúe puramente hacia el exterior se suele posponer a las Acciones de tipo volcado (`foreachPartition`) donde se emplean sentencias manejando la repetición y las transacciones idempotentemente y atómicamente.
 
 
-## Ejercicio 4: Monitoreo del exito de las tareas
-
-### a_ ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline? ¿En qué situación un Accumulator puede dar un valor incorrecto?
-
-Porque cada worker modifica los acumuladores de a uno generando que si uno lo revisa durante la ejecucion quizas acceda a informacion que ya no se corresponde con el momento donde se realiza la accion logica o el valor obtenido no es el correcto para la accion que se quiere realizar. Por ejemplo si un dos workers a y b cuentan sus elementos bien parseados pero a es mas rapido que b. Entonces a al terminar por ejemplo a la mitad de la ejecucion de b llama la informacion guardada en el accumulator se encontraria con lo siguiente: #(bien parseados a) + #(bien parseados b)/2 Luego cuando b termine si llama la informacion encontraira #(bien parseados a) + #(bien parseados b) En este caso ni a ni b pueden asegurar que la informacion obtenida sea la correcta en el momento que se ejecutaron.
-### b_ ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
-Al final del pipeline es cuando spark recopila la informacion que hay en un accumulator y la entrega al driver para que pueda leerla.
-
-### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
-
-
-
 ## Ejercicio 3: Paralelización del computo de entidades
 
 ### Barreras de sincronización
-   `reduceByKey constituye una barrera de sincronización porque Spark debe reunir todos los valores asociados a una misma clave para poder combinarlos. Durante este proceso los datos son redistribuidos entre los workers mediante un shuffle. Como Spark puede combinar los valores en distintos órdenes y en distintas particiones, la función utilizada debe ser asociativa y conmutativa. Estas propiedades garantizan que el resultado final sea correcto independientemente de cómo Spark distribuya y reorganice el trabajo entre los workers.
+`reduceByKey` constituye una barrera de sincronización porque Spark debe reunir todos los valores asociados a una misma clave para poder combinarlos. Durante este proceso los datos son redistribuidos entre los workers mediante un shuffle. Como Spark puede combinar los valores en distintos órdenes y en distintas particiones, la función utilizada debe ser asociativa y conmutativa. Estas propiedades garantizan que el resultado final sea correcto independientemente de cómo Spark distribuya y reorganice el trabajo entre los workers.
 
 ### Diccionario de entidades
-   El diccionario de entidades es serializado por Spark y distribuído a los workers para que puedan usarlo para clasificar y extraer entidades. Esto evita que cada worker deba cargar su propio diccionario desde 0.
+El diccionario de entidades es serializado por Spark y distribuído a los workers para que puedan usarlo para clasificar y extraer entidades. Esto evita que cada worker deba cargar su propio diccionario desde 0.
 
-   Ocurre aquí: \
-   `val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)`\
-   `val entidades = downloadResults.flatMap( post =>{`\
-   `val postCompleto = post.title + " " + post.selftext`\
-   `val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})`
+Ocurre aquí: \
+`val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)`\
+`val entidades = downloadResults.flatMap( post =>{`\
+`val postCompleto = post.title + " " + post.selftext`\
+`val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})`
+
+---
 
 ## Ejercicio 4: Monitoreo del exito de las tareas
 
 ### a_ ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline? ¿En qué situación un Accumulator puede dar un valor incorrecto?
 
 Porque cada worker modifica los acumuladores de a uno generando que si uno lo revisa durante la ejecucion quizas acceda a informacion que ya no se corresponde con el momento donde se realiza la accion logica o el valor obtenido no es el correcto para la accion que se quiere realizar. Por ejemplo si un dos workers a y b cuentan sus elementos bien parseados pero a es mas rapido que b. Entonces a al terminar por ejemplo a la mitad de la ejecucion de b llama la informacion guardada en el accumulator se encontraria con lo siguiente: #(bien parseados a) + #(bien parseados b)/2 Luego cuando b termine si llama la informacion encontraira #(bien parseados a) + #(bien parseados b) En este caso ni a ni b pueden asegurar que la informacion obtenida sea la correcta en el momento que se ejecutaron.
+
 ### b_ ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
 Al final del pipeline es cuando spark recopila la informacion que hay en un accumulator y la entrega al driver para que pueda leerla.
 
 ### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
+
+---
+
+## Ejercicio 5: Acceso a datos y estadísticas del resultado
+
+### a_ Recomputaciones innecesarias y la falta de cache()
+
+**Puntos del código donde se recomputa innecesariamente:**
+Se recomputa un esfuerzo distribuido de forma innecesaria cada vez que disparamos acciones terminales como `.count()`, `.isEmpty()` o `.collect()` sobre los tres RDDs troncales principales (`subscriptions`, `downloadResults`, y `filteredPosts`) con tal de obtener valores aislados de métricas a imprimir (como sumar variables aisladas por error tales como `postsFailed`, `filteredPosts` o `feedsSuccess` restando y pidiendo un conteo a la vez). Al no indicar retención explícita en RAM (cache), Spark libera el bloque procesado y el pipeline "olvida y suelta" el cálculo anterior por cada línea que ejecutas luego.
+
+**¿Qué ocurriría si no llamaran a cache()?**
+Debido al diseño base de Apache Spark donde las transformaciones son *perezosas* (Lazy Evaluation), si no invocamos la persistencia `cache()` sobre un RDD (que en nuestro diseño particular nos cuesta costosos tiempos de red I/O y fuerte carga de CPU al decodificar JSON), Spark no resguardará la respuesta temporal. Por consiguiente, ante cada invocación de Acción aguas abajo que requiera del pipeline, el manejador desechará cualquier milagro de velocidad y reconstruirá el DAG por rigor volviendo todo su linaje hacia atrás. Esto provoca rehacer a repetición el recorrido base en los drivers (`sc.parallelize()`), incluyendo gatillar otra docenas de aperturas remotas HTTP para *volver a pedir y decodificar* los mismos portales a Reddit infinitas veces.
+
+**¿Cuántas veces se ejecutaría la descarga de feeds?**
+La descarga se activa a partir del método asociado sobre el `downloadResults`, y esta dependencia es heredada en cascada atando permanentemente a `filteredPosts` y a `allEntities`. 
+Ewntonces tendríamos:
+1. `val postsSuccess = downloadResults.count()` -> **(1ra descarga en todos los workers)**
+2. `val postsFailed = [...] - downloadResults.count()` -> **(2da descarga...)**
+3. `val postsFiltered = downloadResults.count() - filteredPosts.count()` -> **(3ra y 4ta doble descarga separada resuelta dentro de las restas secuenciales del mismo print)**
+4. `if (!filteredPosts.isEmpty())` -> **(5ta descarga por gatillo oculto `take`)**
+5. `totalChars.reduce(_+_)` -> **(6ta descarga de reducción total)**
+6. `filteredPosts.count()` -> **(7ma descarga repetición)**
+7. `if (filteredPosts.isEmpty)` -> **(8va descarga repetición por comprobación)**
+8. `val allEntitiesRDD = allEntities.collect()` -> **(9na descarga final exigida por el Driver)**
+
+Se realizaría la descarga de feeds **9 veces** en total, lo cual es un desperdicio de recursos y tiempo. Ñao, ñao, no podemos permitirnos esto.
