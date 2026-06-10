@@ -1,0 +1,8 @@
+project/*
+reddit-mock/*
+hello_world/*
+
+laboratorio/data/._*
+laboratorio/data/valid_entities/._*
+laboratorio/project/*
+laboratorio/target/*

@@ -75,9 +75,7 @@ object Main {
 
     // Count feed successes/failures lo hacemos con lo que tenemos
     val feedsSuccess = subscriptions.count()
-    println(feedAcum.value)
     val feedsFailed = subscriptionOpts.count() - subscriptions.count()
-    println(failFeedAcum.value)
 
     // ERROR HANDLING: Validar que hay suscripciones válidas
     if (feedsSuccess == 0) {
@@ -87,28 +85,28 @@ object Main {
     // Flatten all posts and count JSON parse failures
     //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
     val postsSuccess = downloadResults.count() 
-    println(postAcum.value)
     val postsFailed = subscriptions.count() - downloadResults.count()
-    println(failPostAcum.value)
     
     // Filter empty posts
     val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty)
     val postsFiltered = downloadResults.count() - filteredPosts.count()
 
     // Calculate average characters in filtered posts
+    val charsAcum = sc.longAccumulator("avg chars per feed")
     val kept = filteredPosts.count()
     val totalChars: Long = if (kept == 0) 0L
       else filteredPosts.map(post => post.title.length.toLong + post.selftext.length.toLong).reduce(_ + _)
-    val avgChars: Double = if (kept > 0) totalChars.toDouble / kept else 0.0
+    val avgChars: Double = if  (kept > 0) totalChars.toDouble / kept else 0.0
+    charsAcum.add(avgChars.toLong)
 
     // Prepare statistics
     val stats = Map(
-      "feedsSuccess" -> feedsSuccess.toInt,
-      "feedsFailed" -> feedsFailed.toInt,
-      "postsSuccess" -> postsSuccess.toInt,
-      "postsFailed" -> postsFailed.toInt,
-      "postsFiltered" -> postsFiltered.toInt,
-      "avgChars" -> avgChars.toInt
+      "feedsSuccess" -> feedAcum.value.toInt,
+      "feedsFailed" -> failFeedAcum.value.toInt,
+      "postsSuccess" -> postAcum.value.toInt,
+      "postsFailed" -> failPostAcum.value.toInt,
+      "postsFiltered" -> failPostAcum.value.toInt,
+      "avgChars" -> charsAcum.value.toInt
     )
 
     // Print output
@@ -154,27 +152,27 @@ object Main {
   //  Analyzer.downloadResults(postCompleto,dictionary))
   
 }
-
-  val entidades = downloadResults.flatMap( post =>{
-    val postCompleto = post.title + " " + post.selftext
-
-    //Generamos un RDD[NamedEntity]
-    val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})
-  
-  //Convertimos cada NamedEntity en un mapeo ((tipo,name) 1) para agrupar y sumar luego
-  val mapedPost = entidades.map( post => ((post.entityType, post.text), 1))
-
-  //Sumamos el 1 de ada entidad mapeada agrupando por tipo
-  val entityCount = mapedPost.reduceByKey( _ + _)
-
-
-  // RDD[(tipo,nombre), cantidad]
-  val orderEntity = entityCount.sortBy(e => (e._2, e._1._1), false)
-
-  println(Formatters.formatEntityStats(orderEntity))
-
-  //FIN EJERCICIO 3
-
-
-  
-}
+//
+//  val entidades = downloadResults.flatMap( post =>{
+//    val postCompleto = post.title + " " + post.selftext
+//
+//    //Generamos un RDD[NamedEntity]
+//    val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})
+//  
+//  //Convertimos cada NamedEntity en un mapeo ((tipo,name) 1) para agrupar y sumar luego
+//  val mapedPost = entidades.map( post => ((post.entityType, post.text), 1))
+//
+//  //Sumamos el 1 de ada entidad mapeada agrupando por tipo
+//  val entityCount = mapedPost.reduceByKey( _ + _)
+//
+//
+//  // RDD[(tipo,nombre), cantidad]
+//  val orderEntity = entityCount.sortBy(e => (e._2, e._1._1), false)
+//
+//  println(Formatters.formatEntityStats(orderEntity))
+//
+//  //FIN EJERCICIO 3
+//
+//
+//  
+//}

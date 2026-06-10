@@ -167,6 +167,31 @@ Al final del pipeline es cuando spark recopila la informacion que hay en un accu
 
 ### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
 
+_Las siguientes ejecuciones se realizaron en la computadora de Hernan Pereyra sobre la version del proyecto usando el reddit-mock_
+
+#### Version sin accumulators de spark:
+========== ESTADÍSTICAS DE PROCESAMIENTO ==========
+Feeds descargados exitosamente: 4
+Feeds fallidos: 0
+Posts descargados exitosamente: 100
+Posts fallidos: -96
+Posts filtrados (vacíos/nulos): 38
+Largo promedio en posts: 1110
+
+#### Version con accumulators de spark:
+========== ESTADÍSTICAS DE PROCESAMIENTO ==========
+Feeds descargados exitosamente: 36
+Feeds fallidos: 0
+Posts descargados exitosamente: 24
+Posts fallidos: 0
+Posts filtrados (vacíos/nulos): 0
+Largo promedio en posts: 1110
+
+#### Conclusiones
+
+Al ejecutar la recoleccion de las estadisticas dentro de los mismos workers los calculos no realizan bien la concurrencia dando numeros extraños. Por ejemplo puede verse que dice que se descargaron 4 feeds mientras que en la version con spark aparecen 36 feeds. La diferencia es que al igual que la logica map/reduce al usar accumulators la paralelizacion de cuentas es mas segura evitando que ocurran condiciones de carrera que es lo que debe estar ocurriendo en la version sin ellos.
+Asi la logica es generar accumulator -> guardar informacion en el -> terminar la ejecucion del pipe -> acceder a la informacion desde el driver. Evita no solo las condiciones de carrera y valores incorrectos. Sino tambien evita romper la abstraccion del framework.
+
 ---
 
 ## Ejercicio 5: Acceso a datos y estadísticas del resultado
