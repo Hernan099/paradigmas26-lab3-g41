@@ -234,3 +234,19 @@ En Spark, el mecanismo principal de extensión son las funciones que el desarrol
 3. **Sin efectos secundarios (Side Effects) o limitados a idempotencia**:
    - **Restricción**: Las funciones pasadas a las transformaciones deberían tender a ser determinísticas e idempotentes (funciones "puras"), o si causan mutaciones externas (bases de datos, archivos), estas no deberían depender del número de veces que se las ejecute.
    - **Justificación**: Spark provee una robusta tolerancia a fallas. Cuando un worker falla o la red se desconecta antes de terminar su sección de procesamiento de datos, o incluso si Spark nota que un worker opera más lento que los demás (stragglers), Spark puede y va a **ejecutar de nuevo, reactivar o duplicar (especular)** ese trabajo fallido en otro worker. Ante ello, no hay garantía estricta de que tu transformación sobre un dato ejecute una única vez. Si una etapa produce resultados transaccionales, envía correos o debita dinero, un fallo provocaría que el correo se envíe en repetidas ocasiones en la repetición del bloque. Todo el trabajo final que interactúe puramente hacia el exterior se suele posponer a las Acciones de tipo volcado (`foreachPartition`) donde se emplean sentencias manejando la repetición y las transacciones idempotentemente y atómicamente.
+
+
+
+## Ejercicio 3: Paralelización del computo de entidades
+
+### Barreras de sincronización
+   `reduceByKey constituye una barrera de sincronización porque Spark debe reunir todos los valores asociados a una misma clave para poder combinarlos. Durante este proceso los datos son redistribuidos entre los workers mediante un shuffle. Como Spark puede combinar los valores en distintos órdenes y en distintas particiones, la función utilizada debe ser asociativa y conmutativa. Estas propiedades garantizan que el resultado final sea correcto independientemente de cómo Spark distribuya y reorganice el trabajo entre los workers.
+
+### Diccionario de entidades
+   El diccionario de entidades es serializado por Spark y distribuído a los workers para que puedan usarlo para clasificar y extraer entidades. Esto evita que cada worker deba cargar su propio diccionario desde 0.
+
+   Ocurre aquí: \
+   `val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)`\
+   `val entidades = downloadResults.flatMap( post =>{`\
+   `val postCompleto = post.title + " " + post.selftext`\
+   `val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})`
