@@ -138,3 +138,15 @@ En Spark, el mecanismo principal de extensión son las funciones que el desarrol
 3. **Sin efectos secundarios (Side Effects) o limitados a idempotencia**:
    - **Restricción**: Las funciones pasadas a las transformaciones deberían tender a ser determinísticas e idempotentes (funciones "puras"), o si causan mutaciones externas (bases de datos, archivos), estas no deberían depender del número de veces que se las ejecute.
    - **Justificación**: Spark provee una robusta tolerancia a fallas. Cuando un worker falla o la red se desconecta antes de terminar su sección de procesamiento de datos, o incluso si Spark nota que un worker opera más lento que los demás (stragglers), Spark puede y va a **ejecutar de nuevo, reactivar o duplicar (especular)** ese trabajo fallido en otro worker. Ante ello, no hay garantía estricta de que tu transformación sobre un dato ejecute una única vez. Si una etapa produce resultados transaccionales, envía correos o debita dinero, un fallo provocaría que el correo se envíe en repetidas ocasiones en la repetición del bloque. Todo el trabajo final que interactúe puramente hacia el exterior se suele posponer a las Acciones de tipo volcado (`foreachPartition`) donde se emplean sentencias manejando la repetición y las transacciones idempotentemente y atómicamente.
+
+
+## Ejercicio 4: Monitoreo del exito de las tareas
+
+### a_ ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline? ¿En qué situación un Accumulator puede dar un valor incorrecto?
+
+Porque cada worker modifica los acumuladores de a uno generando que si uno lo revisa durante la ejecucion quizas acceda a informacion que ya no se corresponde con el momento donde se realiza la accion logica o el valor obtenido no es el correcto para la accion que se quiere realizar. Por ejemplo si un dos workers a y b cuentan sus elementos bien parseados pero a es mas rapido que b. Entonces a al terminar por ejemplo a la mitad de la ejecucion de b llama la informacion guardada en el accumulator se encontraria con lo siguiente: #(bien parseados a) + #(bien parseados b)/2 Luego cuando b termine si llama la informacion encontraira #(bien parseados a) + #(bien parseados b) En este caso ni a ni b pueden asegurar que la informacion obtenida sea la correcta en el momento que se ejecutaron.
+### b_ ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
+Al final del pipeline es cuando spark recopila la informacion que hay en un accumulator y la entrega al driver para que pueda leerla.
+
+### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
+

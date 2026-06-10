@@ -9,12 +9,12 @@ object Main {
     }
     //creamos una Sparck sesion de forma local
     val spark = SparkSession.builder()
-  .appName("RedditNER")
-  .master("local[*]")
-  .getOrCreate()
+      .appName("RedditNER")
+      .master("local[*]")
+      .getOrCreate()
 
 
-  val sc = spark.sparkContext
+    val sc = spark.sparkContext
 
 
     // Load subscriptions usado spark, esto es lo que crea el rdd
