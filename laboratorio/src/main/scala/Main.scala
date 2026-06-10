@@ -22,6 +22,7 @@ object Main {
 
     // Filter out malformed subscriptions (None values), como usamos rdd, ahora lo hacemos con flatmap, Iterador es el tipo de dato que usa flatmap para 
     // iterar sobre los objetos de rdd, cuando hacemos iterador.empty lo que decimos es: no metas nada, en la logica de la funcion, si algun campo tiene none, no lo incluyas, else incluilo 
+    //aca commit a1233fd cambie la logica de la funcion porque suscription es un option, entonces use cases para que si es some ahga algo y si es none haga otra cosa    
         val feedAcum = sc.longAccumulator("succesful feed")
         val failFeedAcum = sc.longAccumulator("failed feed")
     val subscriptions: RDD[Subscription] = subscriptionOpts.flatMap {
