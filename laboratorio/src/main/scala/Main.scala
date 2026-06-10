@@ -103,6 +103,16 @@ object Main {
     val postCompleto = post.title + " " + post.selftext
 
     //Generamos un RDD[NamedEntity]
-    Analyzer.downloadResults(postCompleto,dictionary))
+  val parsedPost = Analyzer.downloadResults(postCompleto,dictionary))
+  
+  //Convertimos cada NamedEntity en un mapeo ((tipo,name) 1) para agrupar y sumar luego
+  val mapedPost = parsedPost.map( post => ((post.entityType, post.text), 1))
+
+  //Sumamos el 1 de ada entidad mapeada agrupando por tipo
+  val entityCount = mapedPost.reduceByKey( _ + _)
+
+  //FIN EJERCICIO 3
+
+  
   
 }
