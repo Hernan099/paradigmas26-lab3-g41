@@ -111,8 +111,12 @@ object Main {
   //Sumamos el 1 de ada entidad mapeada agrupando por tipo
   val entityCount = mapedPost.reduceByKey( _ + _)
 
+
+  // RDD[(tipo,nombre), cantidad]
+  println(entityCount.sortBy(e => e._1._1, e._2))
+  
   //FIN EJERCICIO 3
 
-  
+
   
 }
