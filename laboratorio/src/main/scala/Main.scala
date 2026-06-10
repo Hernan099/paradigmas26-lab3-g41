@@ -29,11 +29,13 @@ object Main {
         if (s.name.isEmpty || s.url.isEmpty){ 
           failFeedAcum.add(1)
           Iterator.empty
-          }
+        }
         else {
           feedAcum.add(1)
-          Iterator(s)}
+          Iterator(s)
+        }
       case None => Iterator.empty
+    }
 
     // Download feeds and parse posts, tracking success/failure , como lo estamos paralelizando con flatmap, lo que hacemos es:
     //para cada subscripcion, la descargamos, luego, si esta no tiene nada, ponemos iterador.empty, si si tiene algo, sumamos
@@ -61,7 +63,7 @@ object Main {
     //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
     val postsSuccess = downloadResults.count() 
     println(postAcum.value)
-    val postsFailed = subscripcion.count() - downloadResults.count()
+    val postsFailed = subscriptions.count() - downloadResults.count()
     println(failPostAcum.value)
     // Filter empty posts
     val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty)
