@@ -4,6 +4,36 @@
 
 ### a_ Grafo de dependencias
 
+**Paso 1 — Leer suscripciones** (`FileIO.readSubscriptions`)
+  Lee el archivo `subscriptions.json` del disco y lo parsea con json4s. Devuelve una lista de `Option[Subscription]`.
+
+**Paso 2 — Filtrar suscripciones válidas** (`.flatten`)
+  Descarta los `None` y extrae los `Subscription` válidos.
+
+**Paso 3 — Descargar feeds** (`FileIO.downloadFeed`)
+  Para cada `Subscription`, hace una petición HTTP a `subscription.url` y descarga el JSON del feed de Reddit.
+
+**Paso 4 — Parsear JSON → Posts** (`JsonParser.parsePosts`)
+  Toma el JSON descargado y extrae los posts de Reddit (título + selftext).
+
+**Paso 5 — Aplanar posts** (`.flatMap`)
+  Junta todos los posts de todos los feeds en una sola lista plana.
+
+**Paso 6 — Filtrar posts vacíos** (`Analyzer.filterEmptyPosts`)
+  Elimina posts donde `title` o `selftext` estén vacíos o solo contengan whitespace.
+
+**Paso 7 — Cargar diccionarios** (`Dictionary.loadAll`)
+  Lee los archivos de texto (`people.txt`, `universities.txt`, `languages.txt`, etc.) y construye una lista de objetos `NamedEntity` (con su subtipo concreto: `Person`, `University`, `ProgrammingLanguage`, etc.).
+
+**Paso 8 — Detectar entidades** (`Analyzer.detectEntities`)
+  Para cada post filtrado, combina título + selftext y busca qué entidades del diccionario aparecen como palabras completas (matching case-insensitive).
+
+**Paso 9 — Contar entidades** (`Analyzer.countEntities`)
+  Agrupa las entidades por `(entityType, entityName)` y cuenta las ocurrencias de cada una.
+
+**Paso 10 — Ranking top-K** (`Formatters.formatEntityStats`)
+  Ordena las entidades por frecuencia (descendente), luego por tipo y nombre (alfabético), toma las top-K, y formatea la salida para consola.
+
 ____________________________________________________________________________________
 | Arista |          Output de → Input de           |           Tipo Scala          |
 |--------|-----------------------------------------|-------------------------------|
