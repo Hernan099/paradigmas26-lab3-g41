@@ -46,13 +46,14 @@ object Main {
     val feedsFailed = subscriptionOpts.count() - subscriptions.count()
 
     // Flatten all posts and count JSON parse failures
-    //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
-    val postsSuccess = downloadResults.count() 
+    //borramos una variable que guardaba un map con todos los post, que ya no necesitamos, y cambiamos todo para poder sacar lo que necesita
+    val postsSuccess = downloadResults.count()
     val postsFailed = subscripcion.count() - downloadResults.count()
 
     // Filter empty posts
     val filteredPosts = Analyzer.filterEmptyPosts(allPosts)
     val postsFiltered = allPosts.length - filteredPosts.length
+    
 
     // Calculate average characters in filtered posts
     val totalChars = filteredPosts.map(post => post.title.length + post.selftext.length).sum
@@ -95,4 +96,13 @@ object Main {
     println()
     println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
   }
+  //EJERCICIO 3
+
+  //Encuentro las entidades y genero un nuevo RDD con las entidades completas, es decir, titulo + texto
+  val entidades = downloadResults.flatMap( post => 
+    val postCompleto = post.title + " " + post.selftext
+
+    //Generamos un RDD[NamedEntity]
+    Analyzer.downloadResults(postCompleto,dictionary))
+  
 }
