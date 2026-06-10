@@ -125,7 +125,6 @@
 ## Resumen: Driver vs. Workers
 
 | Paso | Descripción | Ejecuta | ¿Paralelizable? |
-|------|-------------|---------|-----------------|
 | 1 | Leer suscripciones | Driver | No (archivo local de config) |
 | 2 | Filtrar suscripciones válidas | Driver | No (lista pequeña) |
 | 3 | Descargar feeds | Workers | **Sí** (cada URL es independiente) |
@@ -317,7 +316,6 @@ entityCounts.toList
 ## Resumen del mapeo
 
 | Paso | Abstracción | Razón clave |
-|------|-------------|-------------|
 | 1 | No encaja | Pre-RDD, driver |
 | 2 | No encaja | Pre-RDD, driver |
 | 3 | `map` | 1 suscripción → 1 JSON (1:1) |
@@ -328,3 +326,163 @@ entityCounts.toList
 | 8 | `flatMap` | 1 post → N entidades (1:N) |
 | 9 | `map` + `reduceByKey` | Patrón MapReduce: generar pares + agregar |
 | 10 | No encaja | Acción (collect/takeOrdered), no transformación |
+
+---
+
+# Explicación paso a paso — Ejercicio 1c
+
+## Conceptos previos necesarios
+
+### ¿Qué es una barrera de sincronización?
+
+En computación paralela, una **barrera de sincronización** es un punto del programa donde un proceso (worker) no puede continuar hasta que **todos** los demás procesos hayan llegado al mismo punto. Es como un semáforo en rojo para todos: nadie cruza hasta que todos estén listos.
+
+En Spark, las barreras aparecen cuando los datos necesitan ser **redistribuidos entre workers** (shuffle) o **recolectados en el driver** (acción). En ambos casos, un worker individual no puede producir su resultado final sin que los demás hayan terminado su parte.
+
+### Transformaciones narrow vs. wide
+
+Spark clasifica las operaciones en dos tipos:
+
+- **Narrow (estrechas):** Cada partición de salida depende de **una sola** partición de entrada. Los workers operan de forma completamente independiente. Ejemplos: `map`, `flatMap`, `filter`. No requieren comunicación entre workers → **NO son barreras**.
+
+- **Wide (amplias):** Cada partición de salida puede depender de **múltiples** particiones de entrada. Los datos deben **mezclarse** (shuffle) a través de la red entre workers. Ejemplos: `reduceByKey`, `groupByKey`, `sortByKey`. Requieren que todos los workers terminen la etapa anterior → **SON barreras**.
+
+### ¿Qué es un shuffle?
+
+Un **shuffle** es la operación de Spark que redistribuye datos entre workers según una clave. Por ejemplo, si el worker 1 tiene el par `("Scala", 1)` y el worker 2 también tiene `("Scala", 1)`, el shuffle envía ambos al mismo worker para que pueda sumarlos y obtener `("Scala", 2)`. Es la operación más costosa de Spark (implica escritura a disco + transferencia de red).
+
+### ¿Qué es una acción?
+
+Una **acción** en Spark es una operación que **materializa** el resultado y lo envía al driver (ej: `collect`, `count`, `take`, `takeOrdered`). A diferencia de las transformaciones (que son lazy), las acciones disparan la ejecución de todo el DAG. Son barreras porque el driver necesita esperar a que **todos** los workers terminen para tener el resultado completo.
+
+---
+
+## Análisis paso a paso del pipeline
+
+### Pasos 1 y 2 — Leer y filtrar suscripciones → **Secuenciales (Driver)**
+
+**Razonamiento:** Estos pasos se ejecutan en el driver, antes de que exista cualquier RDD. No involucran workers, así que la pregunta "¿barrera o independiente?" no aplica. Son código secuencial del driver.
+
+**No son barreras ni independientes:** simplemente no están en el mundo distribuido.
+
+---
+
+### Paso 3 — Descargar feeds (map) → **Independiente**
+
+**Razonamiento:** En un contexto Spark, cada suscripción estaría en una partición del RDD. El `map` aplica `downloadFeed(url)` a cada elemento **individualmente**. 
+
+**¿Necesita datos de otros workers?** No. Descargar `reddit.com/r/programming.json` no tiene relación alguna con descargar `reddit.com/r/scala.json`. Cada worker descarga su propia suscripción y produce su propio resultado.
+
+**¿Es una transformación narrow o wide?** **Narrow**. Cada partición de salida depende solo de su propia partición de entrada.
+
+**Conclusión:** Independiente. No es barrera.
+
+---
+
+### Paso 4 — Parsear JSON → Posts (flatMap) → **Independiente**
+
+**Razonamiento:** `flatMap` aplica una función que produce 0 o más posts por cada JSON. Cada worker parsea su JSON localmente.
+
+**¿Necesita datos de otros workers?** No. El JSON de r/programming se parsea sin necesitar el JSON de r/scala.
+
+**¿Es narrow o wide?** **Narrow**. Ningún dato cruza entre particiones.
+
+**Conclusión:** Independiente. No es barrera.
+
+---
+
+### Paso 5 — Aplanar posts (implícito en flatMap) → **Independiente**
+
+**Razonamiento:** El aplanamiento ya ocurre como parte del `flatMap` del paso 4. Cada partición aplana sus propios resultados localmente.
+
+**Conclusión:** Independiente. Es parte del flatMap anterior, que es narrow.
+
+---
+
+### Paso 6 — Filtrar posts vacíos (filter) → **Independiente**
+
+**Razonamiento:** `filter` evalúa un predicado booleano (`post.title.nonEmpty && ...`) en **cada post individualmente**. 
+
+**¿Necesita datos de otros workers?** No. Que un post de r/programming esté vacío no depende de los posts de r/scala.
+
+**¿Es narrow o wide?** **Narrow**. Cada partición filtra sus propios datos sin comunicarse con otras.
+
+**Conclusión:** Independiente. No es barrera.
+
+---
+
+### Paso 7 — Cargar diccionarios (broadcast) → **Driver con broadcast**
+
+**Razonamiento:** Los diccionarios se cargan en el driver y se envían a todos los workers como broadcast variable. El broadcast en sí tiene un componente de sincronización implícito (el driver debe enviar y todos los workers deben recibir antes de usarlo en el paso 8), pero no es una barrera entre workers: es una barrera entre el driver y los workers.
+
+**Nota importante:** El broadcast es **unidireccional** (driver → workers). No depende de que los workers hayan terminado nada. Es más bien un paso de setup que de sincronización.
+
+---
+
+### Paso 8 — Detectar entidades (flatMap) → **Independiente**
+
+**Razonamiento:** Cada worker toma sus posts filtrados locales y busca entidades usando la broadcast variable (que es una copia local, idéntica en todos los workers).
+
+**¿Necesita datos de otros workers?** No. Detectar que "Scala" aparece en un post de r/programming no requiere saber qué entidades encontró el worker que procesó r/scala.
+
+**¿Es narrow o wide?** **Narrow**. Cada worker opera solo con su partición y la copia local del diccionario.
+
+**Conclusión:** Independiente. No es barrera.
+
+---
+
+### Paso 9 — Contar entidades (map + reduceByKey) → **🚧 BARRERA 🚧**
+
+**Razonamiento:** Este es el paso clave. Tiene dos fases:
+
+1. **`map(e => ((e.entityType, e.text), 1))`** — Esta parte es **narrower**: cada worker convierte sus entidades locales en pares clave-valor. Es independiente.
+
+2. **`reduceByKey(_ + _)`** — Esta parte requiere un **shuffle**. ¿Por qué? Porque la entidad "Scala" puede haber sido detectada por el worker 1 (3 veces), el worker 2 (5 veces), y el worker 3 (2 veces). Para obtener el conteo total de "Scala" (10), Spark necesita enviar TODOS los pares con clave `("ProgrammingLanguage", "Scala")` al MISMO nodo. Esto requiere que todos los workers terminen de emitir sus pares.
+
+**¿Necesita datos de otros workers?** Sí. El conteo final de cada entidad depende de los resultados de TODOS los workers.
+
+**¿Es narrow o wide?** **Wide**. El `reduceByKey` redistribuye datos entre particiones.
+
+**¿Un worker puede producir el resultado final solo?** No. Si el worker 1 dice "Scala: 3", eso no es el resultado final. Necesita esperar a los demás para saber si el total es 3, 8 o 100.
+
+**Conclusión:** Es una **barrera de sincronización**. Ningún worker puede pasar al paso 10 hasta que todos hayan terminado de emitir y reducir.
+
+> **Nota técnica:** `reduceByKey` hace reducciones parciales locales (combiner-side) antes del shuffle, lo que es más eficiente que `groupByKey`. Pero sigue necesitando un shuffle para combinar los resultados parciales de diferentes workers, por lo que sigue siendo una barrera.
+
+---
+
+### Paso 10 — Ranking top-K (collect/takeOrdered) → **🚧 BARRERA 🚧**
+
+**Razonamiento:** Para determinar las top-K entidades más frecuentes, el driver necesita ver TODOS los conteos finales. 
+
+**¿Necesita datos de otros workers?** Sí. Si "Scala: 10" está en la partición del worker 1 y "Python: 15" está en la partición del worker 2, solo mirando ambos se puede saber que Python va primero.
+
+**¿Un worker puede producir el resultado final solo?** No. Ningún worker tiene visión global de todas las entidades.
+
+**Conclusión:** Es una **barrera de sincronización** (acción). El driver espera a que TODOS los workers terminen el paso 9 antes de recolectar y ordenar.
+
+---
+
+## Resumen: Cómo llegué a la respuesta del Informe.md
+
+La clave fue aplicar estas tres preguntas a cada paso:
+
+1. **¿El paso opera sobre datos distribuidos?** → Si no (pasos 1, 2, 7), es del driver y no es barrera ni independiente entre workers.
+
+2. **¿Un worker necesita datos de otros workers para producir su resultado?**
+   - No → **Independiente** (narrow transformation). Pasos 3, 4, 5, 6, 8.
+   - Sí → **Barrera** (wide transformation o acción). Pasos 9, 10.
+
+3. **¿Hay un shuffle o una acción involucrada?**
+   - `reduceByKey` (paso 9) → shuffle → barrera.
+   - `collect`/`takeOrdered` (paso 10) → acción → barrera.
+   - `map`, `flatMap`, `filter` (pasos 3-8) → narrow → independiente.
+
+### Clasificación final
+
+| Tipo | Pasos | Razón |
+|------|-------|-------|
+| **Secuencial (Driver)** | 1, 2, 7 | No participan workers |
+| **Independiente entre workers** | 3, 4, 5, 6, 8 | Transformaciones narrow, sin shuffle |
+| **Barrera de sincronización** | 9, 10 | Requieren shuffle (9) o acción (10) |
+
