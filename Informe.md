@@ -139,6 +139,67 @@ En Spark, el mecanismo principal de extensión son las funciones que el desarrol
    - **Restricción**: Las funciones pasadas a las transformaciones deberían tender a ser determinísticas e idempotentes (funciones "puras"), o si causan mutaciones externas (bases de datos, archivos), estas no deberían depender del número de veces que se las ejecute.
    - **Justificación**: Spark provee una robusta tolerancia a fallas. Cuando un worker falla o la red se desconecta antes de terminar su sección de procesamiento de datos, o incluso si Spark nota que un worker opera más lento que los demás (stragglers), Spark puede y va a **ejecutar de nuevo, reactivar o duplicar (especular)** ese trabajo fallido en otro worker. Ante ello, no hay garantía estricta de que tu transformación sobre un dato ejecute una única vez. Si una etapa produce resultados transaccionales, envía correos o debita dinero, un fallo provocaría que el correo se envíe en repetidas ocasiones en la repetición del bloque. Todo el trabajo final que interactúe puramente hacia el exterior se suele posponer a las Acciones de tipo volcado (`foreachPartition`) donde se emplean sentencias manejando la repetición y las transacciones idempotentemente y atómicamente.
 
+## Ejercicio 2:  Paralelizar la descarga de feeds
+
+### Manejo de errores, ¿Que pasa si no implementamos los manejos de errores?
+
+
+1
+***
+Si un subscription no se puede parsear porque le falta el campo name o url, imprimir por cada una de ellas Warning: Skipping malformed subscription (missing 'name' or 'url' field)
+***
+
+Si no se implementa este manejo de errores, seria dificil de debuggearporque los errores imprimirian failed to download y no sabriamos por que
+
+
+2
+***
+Si no existe el archivo de suscripciones, imprimir Error: Could not load $filePath - file not found
+***
+
+se crashea el programa y falla la papeline
+3
+*** 
+Si no se puede parsear el archivo de suscripciones, imprimir Error: Could not load $filePath - invalid JSON format
+***
+
+se crashea el programa 
+
+4
+***
+Si no hay suscripciones para procesar, imprimir Error: No valid subscriptions found y salir del programa.
+***
+
+se procesarian 0 post sin saber porque 
+
+5
+*** 
+Si no existe el directorio de dictionary, "Error: entities directory '$entitiesDir' not found"
+***
+
+se crashea el programa
+
+6
+***
+Por cada archivo de entidad no encontrado o no leído correctamente, imprimir println(s"Warning: Could not load $entitiesDir/people.txt")
+***
+
+se hace trabajo para nada, un worker fallaria al final del analisis y todo lo anterior es trabajo que no sirve
+
+
+7
+***
+Si no se puede parsear un post de una suscripción, por cada uno imprimir "Warning: Failed to parse posts from '${subscription.name}' (${subscription.url})"
+***
+
+se crashea el programa
+
+8
+***
+Si no se puede hacer fetch de una url, "Warning: Failed to download from '${subscription.name}' (${subscription.url})"
+***
+
+el prgrama se puede crashear si una url es invalida
 
 ## Ejercicio 3: Paralelización del computo de entidades
 
