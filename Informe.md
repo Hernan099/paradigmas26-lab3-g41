@@ -216,3 +216,21 @@ Los pasos 3, 4, 5, 6 y 8 son **transformaciones narrow** (no requieren shuffle).
 - **filter** (paso 6): mantiene o descarta localmente, sin ver datos de otros.
 
 Ninguno de estos pasos necesita que otro worker termine para poder proceder. Los workers ejecutan estos pasos en paralelo, cada uno a su propio ritmo, sin esperarse mutuamente.
+
+---
+
+### d_ Restricciones sobre las funciones de extensión en Spark
+
+En Spark, el mecanismo principal de extensión son las funciones que el desarrollador provee a operaciones como `map`, `flatMap`, `filter` y `reduceByKey`. Dado que estas funciones se definen en el programa principal pero se ejecutan en los nodos de cómputo (workers) de un entorno distribuido, Spark impone o asume ciertas restricciones críticas sobre ellas para garantizar un correcto funcionamiento:
+
+1. **Serialización**:
+   - **Restricción**: Toda la función (como closure) y cualquier variable de su entorno léxico que referencie internamente, debe ser serializable.
+   - **Justificación**: El programa (el driver) compila y define el closure. Sin embargo, para ejecutarlo en un worker remoto, Spark debe convertir ese bloque de memoria en una secuencia de bytes, viajar por la red mediante RPC, y materializar la función en la Máquina Virtual de Java del worker. Si la función depende de un objeto que no puede serializarse (por ejemplo, una conexión a base de datos persistente o un socket), Spark no puede enviarla, lo que resulta en un error de compilación o runtime (`NotSerializableException`).
+
+2. **Ausencia de estado mutado compartido (Shared State)**:
+   - **Restricción**: Las funciones no deben depender de la posibilidad de modificar directamente un estado global compartido.
+   - **Justificación**: Los workers operan en un espacio de memoria aislado (RAM física separada). Si tu función hace referencia a una variable local definida en el driver y la modifica (ej: incrementa un contador global `counter += 1`), las variaciones solo sucederán sobre una **copia local** de esa variable transferida a ese worker particular. Al driver original no le llegará esta alteración ni la compartirán entre distintos workers, manteniéndose el valor base en `0`. La comunicación de información y agregados en Spark depende siempre de los mecanismos puros (`reduce`, `groupBy`), o de herramientas especiales diseñadas para la distribución como *Broadcast Variables* (estado inmutable y de solo lectura común a todos, utilizado en el paso 7 de nuestro lab) y *Accumulators* (varibles de solo-escritura).
+
+3. **Sin efectos secundarios (Side Effects) o limitados a idempotencia**:
+   - **Restricción**: Las funciones pasadas a las transformaciones deberían tender a ser determinísticas e idempotentes (funciones "puras"), o si causan mutaciones externas (bases de datos, archivos), estas no deberían depender del número de veces que se las ejecute.
+   - **Justificación**: Spark provee una robusta tolerancia a fallas. Cuando un worker falla o la red se desconecta antes de terminar su sección de procesamiento de datos, o incluso si Spark nota que un worker opera más lento que los demás (stragglers), Spark puede y va a **ejecutar de nuevo, reactivar o duplicar (especular)** ese trabajo fallido en otro worker. Ante ello, no hay garantía estricta de que tu transformación sobre un dato ejecute una única vez. Si una etapa produce resultados transaccionales, envía correos o debita dinero, un fallo provocaría que el correo se envíe en repetidas ocasiones en la repetición del bloque. Todo el trabajo final que interactúe puramente hacia el exterior se suele posponer a las Acciones de tipo volcado (`foreachPartition`) donde se emplean sentencias manejando la repetición y las transacciones idempotentemente y atómicamente.
