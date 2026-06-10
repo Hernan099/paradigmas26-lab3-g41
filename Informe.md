@@ -4,63 +4,36 @@
 
 ### a_ Grafo de dependencias
 
-**Paso 1 — Leer suscripciones** (`FileIO.readSubscriptions`)
-  Lee el archivo `subscriptions.json` del disco y lo parsea con json4s. Devuelve una lista de `Option[Subscription]`.
+**Paso 1 — Conexión**
+  El Driver lee las suscripciones desde el origen de datos/archivo local y distribuye los registros para iniciar el clúster.
 
-**Paso 2 — Filtrar suscripciones válidas** (`.flatten`)
-  Descarta los `None` y extrae los `Subscription` válidos.
+**Paso 2 — Descarga**
+  Cada Worker toma sus asignaciones, abre la conexión a la URL externa (HTTP), descarga el contenido y decodifica localmente su propio documento JSON, aplanando los datos útiles para producir una secuencia de Posts.
 
-**Paso 3 — Descargar feeds** (`FileIO.downloadFeed`)
-  Para cada `Subscription`, hace una petición HTTP a `subscription.url` y descarga el JSON del feed de Reddit.
+**Paso 3 — Extracción de entidades**
+  Cada Worker recorre el texto de sus Posts locales, consultando un diccionario auxiliar distribuido previamente ("broadcast"), en búsqueda de coincidencias limpiadas para arrojar una lista de menciones de Entidades.
 
-**Paso 4 — Parsear JSON → Posts** (`JsonParser.parsePosts`)
-  Toma el JSON descargado y extrae los posts de Reddit (título + selftext).
+**Paso 4 — Clasificación**
+  Cada Worker reempaqueta cada mención de entidad asignándole un valor base de ocurrencia matemática, dejándola estandarizada mediante una clave primaria (`TipoDeEntidad, NombreDeLaEntidad`) lista para la fase de reducción.
 
-**Paso 5 — Aplanar posts** (`.flatMap`)
-  Junta todos los posts de todos los feeds en una sola lista plana.
+**Paso 5 — Conteo**
+  Los Workers entablan comunicación cruzada (Shuffle) por la red local del cluster para reagrupar todas las coincidencias atadas por la misma clave y reducir (sumar matemáticamente) sus contadores iterativamente hasta que el cluster concuerde los conteos unificados de cada entidad.
 
-**Paso 6 — Filtrar posts vacíos** (`Analyzer.filterEmptyPosts`)
-  Elimina posts donde `title` o `selftext` estén vacíos o solo contengan whitespace.
-
-**Paso 7 — Cargar diccionarios** (`Dictionary.loadAll`)
-  Lee los archivos de texto (`people.txt`, `universities.txt`, `languages.txt`, etc.) y construye una lista de objetos `NamedEntity` (con su subtipo concreto: `Person`, `University`, `ProgrammingLanguage`, etc.).
-
-**Paso 8 — Detectar entidades** (`Analyzer.detectEntities`)
-  Para cada post filtrado, combina título + selftext y busca qué entidades del diccionario aparecen como palabras completas (matching case-insensitive).
-
-**Paso 9 — Contar entidades** (`Analyzer.countEntities`)
-  Agrupa las entidades por `(entityType, entityName)` y cuenta las ocurrencias de cada una.
-
-**Paso 10 — Ranking top-K** (`Formatters.formatEntityStats`)
-  Ordena las entidades por frecuencia (descendente), luego por tipo y nombre (alfabético), toma las top-K, y formatea la salida para consola.
+**Paso 6 — Ranking**
+  El Driver envía una orden terminal a los workers: se trae (recolecta) los contadores consolidados devueltos del Paso 5 e interrumpe el paralelismo, ordenándolos él mismo en su hilo principal de forma global para extraer las más repetidas a pantalla.
 
 ____________________________________________________________________________________
 | Arista |          Output de → Input de           |           Tipo Scala          |
 |--------|-----------------------------------------|-------------------------------|
-| 1 → 2  | Suscripciones leídas del JSON (pueden   | `List[Option[Subscription]]`  |
-|        | ser `None` si malformadas)              |                               |
+| 1 → 2  | Conexión → Descarga                     | `RDD[Subscription]`           |
 |--------|-----------------------------------------|-------------------------------|
-| 2 → 3  | Solo las suscripciones válidas (se      | `List[Subscription]`          |
-|        | descartaron los `None`)                 |                               |
+| 2 → 3  | Descarga → Extracción de entidades      | `RDD[Post]`                   |
 |--------|-----------------------------------------|-------------------------------|
-| 3 → 4  | Resultados de descarga: tupla (éxito?,  | `List[(Boolean, List[Post])]` |
-|        | posts parseados)                        |                               |
+| 3 → 4  | Extracción de ents. → Clasificación     | `RDD[NamedEntity]`            |
 |--------|-----------------------------------------|-------------------------------|
-| 4 → 5  | Mismo tipo; la descarga y el parseo     | `List[(Boolean, List[Post])]` |
-|        | ocurren dentro del mismo `map`          |                               |
+| 4 → 5  | Clasificación → Conteo                  | `RDD[((String, String), Int)]`|
 |--------|-----------------------------------------|-------------------------------|
-| 5 → 6  | Todos los posts de todos los feeds,     | `List[Post]`                  |
-|        | aplanados en una sola lista             |                               |
-|--------|-----------------------------------------|-------------------------------|
-| 6 → 8  | Posts no vacíos, listos para análisis   | `List[Post]`                  |
-|--------|-----------------------------------------|-------------------------------|
-| 7 → 8  | Diccionario completo de entidades       | `List[NamedEntity]`           |
-|--------|-----------------------------------------|-------------------------------|
-| 8 → 9  | Todas las entidades detectadas en todos | `List[NamedEntity]`           |
-|        | los posts                               |                               |
-|--------|-----------------------------------------|-------------------------------|
-| 9 → 10 | Conteo de cada entidad agrupada por     | `Map[(String, String), Int]`  |
-|        | `(entityType, entityName)`              |                               |
+| 5 → 6  | Conteo → Ranking                        | `RDD[((String, String), Int)]`|
 |________|_________________________________________|_______________________________|
 
 ---
@@ -70,89 +43,41 @@ ________________________________________________________________________________
 ______________________________________________________________________________________
 | Paso |    Descripción       |   Abstracción Spark    |        Justificación        |
 |------|----------------------|------------------------|-----------------------------|
-|  1   | Leer suscripciones   | **No encaja** (Driver) | Es lectura de un archivo de |
-|      |                      |                        |configuración local.El driver|
-|      |                      |                        |lo ejecuta antes de crear el |
-|      |                      |                        |RDD. No opera sobre datos    |
-|      |                      |                        |distribuidos.                |
+|  1   | Conexión             | **No encaja** (Driver) | Ocurre en el Driver antes   |
+|      |                      |                        | de las transformaciones     |
+|      |                      |                        | en el cluster,              |
+|      |                      |                        | materializa el RDD inicial. |
 |------|----------------------|------------------------|-----------------------------|
-|  2   | Filtrar suscripciones| **No encaja** (Driver) | Opera sobre la lista pequeña|
-|      | válidas              |                        |de config en el driver.Podría|
-|      |                      |                        |verse como `filter`, pero no |
-|      |                      |                        |tiene sentido distribuirlo.  |
+|  2   | Descarga             | **flatMap**            | Partiendo de un elemento    |
+|      |                      |                        | (`Subscription`), baja JSON |
+|      |                      |                        | y produce 0 o más `Post`.   |
 |------|----------------------|------------------------|-----------------------------|
-|  3   | Descargar feeds      | **map**                | Cada suscripción se         |
-|      |                      |                        |transforma independientemente|
-|      |                      |                        |en exactamente un resultado  |
-|      |                      |                        |(el JSON descargado o un     |
-|      |                      |                        |error).`rdd.map(sub =>  `    |
-|      |                      |                        |`downloadFeed(sub.url))`     |
+|  3   | Extracción de Ents.  | **flatMap**            | Por cada Post evaluado,     |
+|      |                      |                        | produce N `NamedEntity`     |
+|      |                      |                        | usando diccionarios.        |
 |------|----------------------|------------------------|-----------------------------|
-|  4   | Parsear JSON → Posts | **flatMap**            | Cada feed JSON produce una  |
-|      |                      |                        |cantidad variable de posts (0|
-|      |                      |                        |o más). `rdd.flatMap(json =>`|
-|      |                      |                        |`parsePosts(json))`          |
+|  4   | Clasificación        | **map**                | Transforma cada elemento en |
+|      |                      |                        | exactamente 1 resultado: la |
+|      |                      |                        | tupla `((Tipo, Nombre), 1)` |
 |------|----------------------|------------------------|-----------------------------|
-|  5   | Aplanar posts        | *(implícito en el      | En Spark, el `flatMap` del  |
-|      |                      |  flatMap anterior)*    | paso 4 ya produce el        |
-|      |                      |                        | aplanamiento. No es un paso |
-|      |                      |                        | separado.                   |
+|  5   | Conteo               | **reduceByKey**        | Combina múltiples valores   |
+|      |                      |                        | asociados a misma clave     |
+|      |                      |                        | a través del clúster.       |
 |------|----------------------|------------------------|-----------------------------|
-|  6   | Filtrar posts vacíos | **filter**             | Cada post se evalúa         |
-|      |                      |                        | independientemente con un   |
-|      |                      |                        | predicado booleano.         |
-|      |                      |                        | `rdd.filter(post => `       |
-|      |                      |                        | `post.title.nonEmpty && `   |
-|      |                      |                        | `...`. Nota: `filter` no es |
-|      |                      |                        | `map` ni `flatMap` ni       |
-|      |                      |                        | `reduceByKey`, es su propia |
-|      |                      |                        | Spark.                      |
-|------|----------------------|------------------------|-----------------------------|
-|  7   | Cargar diccionarios  | **No encaja** (Driver +| Es lectura de archivos      |
-|      |                      | broadcast)             | pequeños de datos de        |
-|      |                      |                        | referencia. Se carga en el  |
-|      |                      |                        | driver y se distribuye como |
-|      |                      |                        | broadcast variable. No opera|
-|      |                      |                        | sobre el RDD.               |
-|------|----------------------|------------------------|-----------------------------|
-|  8   | Detectar entidades   | **flatMap**            | Cada post produce 0 o más   |
-|      |                      |                        | entidades detectadas        |
-|      |                      |                        | (cantidad variable).        |
-|      |                      |                        | `rdd.flatMap(post =>`       |
-|      |                      |                        | `detectEntities(post, `     |
-|      |                      |                        | `dictBroadcast.value))`     |
-|------|----------------------|------------------------|-----------------------------|
-|  9   | Contar entidades     | **map + reduceByKey**  |Primero un `map` para generar|
-|      |                      |                        | pares clave-valor:          |
-|      |                      |                        |`rdd.map(e =>((e.entityType,`|
-|      |                      |                        | `e.text), 1))`, luego un    |
-|      |                      |                        | `reduceByKey(_ + _)` para   |
-|      |                      |                        | sumar los conteos.          |
-|------|----------------------|------------------------|-----------------------------|
-|  10  | Ranking top-K        | **No encaja** (Driver) | Es una **acción**           |
-|      |                      |                        | (`takeOrdered` o `collect`  |
-|      |                      |                        | `+ sort`). Requiere         |
-|      |                      |                        |recolectar datos en el driver|
-|      |                      |                        |para ordenarlos globalmente y|
-|      |                      |                        |mostrar el resultado. No es  |
-|      |                      |                        |una transformación lazy.     |
+|  6   | Ranking              | **No encaja** (Driver) | Es una **Acción** terminal  |
+|      |                      |                        | como `collect`/`takeOrdered`|
+|      |                      |                        | para consolidar resultados. |
 |______|______________________|________________________|_____________________________|
 
 ---
 
 ### Pasos que NO encajan en map/flatMap/reduceByKey
 
-**Paso 1 (Leer suscripciones) y Paso 2 (Filtrar suscripciones válidas):**
-No encajan porque operan _antes_ de que exista un RDD. Son pasos de inicialización que el driver ejecuta secuencialmente para obtener la lista de URLs a procesar. El resultado de estos pasos se usa para _crear_ el RDD inicial (`sc.parallelize(subscriptions)`), no para transformarlo.
+**Paso 1 (Conexión):**
+No encaja en las transformaciones funcionales distribuidas indicadas ya que ocurre pura y exclusivamente del lado del nodo Principal (driver), que levanta un conjunto de datos estáticos desde E/S inicial externa y luego distribuye la tarea subiéndola a un RDD inicial para los Trabajadores (`sc.parallelize()`).
 
-**Paso 6 (Filtrar posts vacíos):**
-No encaja estrictamente en `map`, `flatMap` ni `reduceByKey`. Es un **`filter`**, que es una abstracción propia de Spark. `filter` no transforma elementos ni los reduce: simplemente descarta los que no cumplen un predicado. No produce exactamente un resultado por entrada (puede producir 0 o 1), pero a diferencia de `flatMap`, no cambia el tipo de los elementos.
-
-**Paso 7 (Cargar diccionarios):**
-No encaja porque no opera sobre datos distribuidos. El diccionario es un dato de referencia pequeño que se carga en el driver y se envía a todos los workers como **broadcast variable**. Es un patrón común en Spark: datos auxiliares que todos los workers necesitan pero que no vale la pena distribuir como RDD.
-
-**Paso 10 (Ranking top-K):**
-No encaja porque es una **acción**, no una transformación. Las acciones de Spark (`collect`, `take`, `takeOrdered`, `count`) provocan la ejecución del DAG y traen los resultados al driver. Ordenar globalmente y tomar los top-K requiere visión completa de los datos, lo cual es inherentemente no paralelizable como transformación.
+**Paso 6 (Ranking):**
+Mientras las transformaciones en el interior del marco del problema son _procastinadas (lazy evaluadas)_, este paso encierra una **acción terminal** (`collect`, `takeOrdered`, etc.). Rompe la inercia lógica forzando a los workers a reportar el cómputo final consolidado hacia la memoria del driver o un puerto de base de datos final, finalizando la fase distribuida.
 
 ---
 
@@ -163,89 +88,38 @@ No encaja porque es una **acción**, no una transformación. Las acciones de Spa
 __________________________________________________________________________________________
 | Paso |        Descripción        |      Clasificación       |       Justificación       |
 |------|---------------------------|--------------------------|---------------------------|
-|  1   | Leer suscripciones        |**Secuencial (Driver)**   | Se ejecuta en el driver   |
-|      |                           |                          |antes de crear el RDD. No  |
-|      |                           |                          |involucra workers.         |
+|  1   | Conexión                  |**Secuencial (Driver)**   | Proviene del master al    |
+|      |                           |                          | iniciar. Fase sin workers.|
 |------|---------------------------|--------------------------|---------------------------|
-|  2   | Filtrar suscripciones     |**Secuencial (Driver)**   | Igual que el paso 1: es   |
-|      | válidas                   |                          |código del driver, previo  |
-|      |                           |                          |a la distribución.         |
+|  2   | Descarga (flatMap)        |**Independiente**         | Worker realiza petición   |
+|      |                           |                          | independiente. Trans.     |
+|      |                           |                          | "Narrow".                 |
 |------|---------------------------|--------------------------|---------------------------|
-|  3   | Descargar feeds (map)     |**Independiente**         | Cada worker descarga su   |
-|      |                           |                          |URL sin necesitar datos de |
-|      |                           |                          |otros workers. No hay      |
-|      |                           |                          |comunicación entre         |
-|      |                           |                          |particiones.               |
+|  3   | Extracción (flatMap)      |**Independiente**         | Aplica lógica funcional a |
+|      |                           |                          | texto aislado.            |
 |------|---------------------------|--------------------------|---------------------------|
-|  4   | Parsear JSON → Posts      |**Independiente**         | Cada worker parsea su     |
-|      | (flatMap)                 |                          |propio JSON localmente. No |
-|      |                           |                          |depende de resultados de   |
-|      |                           |                          |otros workers.             |
+|  4   | Clasificación (map)       |**Independiente**         | Asignación sintáctica     |
+|      |                           |                          | clave-valor sin estado    |
+|      |                           |                          | global cruzado.           |
 |------|---------------------------|--------------------------|---------------------------|
-|  5   | Aplanar posts             |**Independiente**         | Implícito en el flatMap   |
-|      | (implícito en flatMap)    |                          |del paso 4. Cada partición |
-|      |                           |                          |aplana sus propios         |
-|      |                           |                          |resultados localmente.     |
+|  5   | Conteo (reduceByKey)      |**BARRERA**               | Requiere redistribución   |
+|      |                           |                          | obligatoria (Shuffle por  |
+|      |                           |                          | red TCP) con otros nodos. |
 |------|---------------------------|--------------------------|---------------------------|
-|  6   | Filtrar posts vacíos      |**Independiente**         | Cada worker aplica el     |
-|      | (filter)                  |                          |predicado booleano solo a  |
-|      |                           |                          |sus posts locales. No      |
-|      |                           |                          |necesita datos de otros    |
-|      |                           |                          |workers.                   |
-|------|---------------------------|--------------------------|---------------------------|
-|  7   | Cargar diccionarios       |**Secuencial (Driver) +** | El driver carga los       |
-|      | (broadcast)               |**broadcast**             |diccionarios y los envía a |
-|      |                           |                          |todos los workers. Es un   |
-|      |                           |                          |punto de sincronización    |
-|      |                           |                          |implícito: el broadcast    |
-|      |                           |                          |debe completarse antes de  |
-|      |                           |                          |que los workers usen el    |
-|      |                           |                          |diccionario en el paso 8.  |
-|------|---------------------------|--------------------------|---------------------------|
-|  8   | Detectar entidades        |**Independiente**         | Cada worker procesa sus   |
-|      | (flatMap)                 |                          |posts contra la broadcast  |
-|      |                           |                          |variable local. No necesita|
-|      |                           |                          |datos de otros workers.    |
-|------|---------------------------|--------------------------|---------------------------|
-|  9   | Contar entidades          |**BARRERA**               | `reduceByKey` implica un  |
-|      | (map + reduceByKey)       |                          |**shuffle**: los datos se  |
-|      |                           |                          |redistribuyen por clave    |
-|      |                           |                          |entre todos los workers.   |
-|      |                           |                          |Ningún worker puede        |
-|      |                           |                          |producir el conteo final de|
-|      |                           |                          |una entidad hasta que TODOS|
-|      |                           |                          |los workers hayan terminado|
-|      |                           |                          |de emitir sus pares        |
-|      |                           |                          |clave-valor. Es una        |
-|      |                           |                          |**barrera de               |
-|      |                           |                          |sincronización**.          |
-|------|---------------------------|--------------------------|---------------------------|
-|  10  | Ranking top-K             |**BARRERA**               | `collect`/`takeOrdered`   |
-|      | (acción)                  |                          |es una **acción** que      |
-|      |                           |                          |requiere que TODOS los     |
-|      |                           |                          |workers terminen el paso 9 |
-|      |                           |                          |y envíen sus resultados    |
-|      |                           |                          |al driver. Ningún worker   |
-|      |                           |                          |puede producir el ranking  |
-|      |                           |                          |parcial sin visión global. |
+|  6   | Ranking (Acción)          |**BARRERA**               | Ordena esperar todo el    |
+|      |                           |                          | final de reducciones en   |
+|      |                           |                          | el sumidero Driver final. |
 |______|___________________________|__________________________|___________________________|
-
 
 #### ¿Por qué las barreras son necesarias?
 
-**Paso 9 (reduceByKey) es barrera** porque para saber cuántas veces aparece, por ejemplo, "Scala" en total, es necesario que **todos** los workers hayan terminado de procesar **todos** sus posts. Si el worker 1 encontró "Scala" 5 veces y el worker 2 encontró "Scala" 3 veces, el conteo final (8) solo puede calcularse después de que ambos terminen. Internamente, Spark ejecuta un **shuffle**: redistribuye los pares `((tipo, nombre), 1)` por clave a través de la red, de modo que todos los valores de la misma clave terminen en el mismo nodo para ser sumados. Este shuffle es la barrera.
+**El Paso de Conteo (Paso 5) es una barrera:** Spark invoca para la agrupación y suma una **Wide Dependency**; no se puede declarar contada en total a la entidad "Scala = 5 veces" usando un solo worker parcial, pues esa entidad bien podría ser el output disperso en N workers en otros servidores. Para sumarlos y contar, este paso bloqueante inicia **un Shuffle** por red, enviando todos los registros de la misma clave esparcidos dispersos para que aterricen en el mismo worker reductor que se encargará materialmente de sumarlo. El reductor no puede enviar respuesta sin estar totalmente seguro que todos terminaron de emitir sus extracciones.
 
-**Paso 10 (collect/takeOrdered) es barrera** porque para determinar los top-K a nivel global, se necesita el resultado completo del paso 9. Aunque las reducciones parciales ya ocurrieron, el driver necesita recolectar todos los conteos finales de todas las particiones para ordenarlos globalmente. Es una barrera porque ningún resultado parcial de un worker individual constituye la respuesta final.
+**El Paso de Ranking (Paso 6) es una barrera:** Como driver que dictamina fin de pipeline, recoger absolutos unificados mediante `collect` u ordenarlos globalmente de todo el cluster es una detención del ciclo paralelo para un retorno sincrónico y secuencial con el script en consola.
 
 #### ¿Por qué los demás pasos NO son barreras?
 
-Los pasos 3, 4, 5, 6 y 8 son **transformaciones narrow** (no requieren shuffle). Cada worker opera exclusivamente sobre los datos de su propia partición:
-
-- **map** (paso 3): un elemento de entrada → un elemento de salida, sin comunicación.
-- **flatMap** (pasos 4, 5, 8): un elemento → N elementos, todos locales al worker.
-- **filter** (paso 6): mantiene o descarta localmente, sin ver datos de otros.
-
-Ninguno de estos pasos necesita que otro worker termine para poder proceder. Los workers ejecutan estos pasos en paralelo, cada uno a su propio ritmo, sin esperarse mutuamente.
+Los pasos de **Descarga (2)**, **Extracción (3)**, y **Clasificación (4)** conforman el grupo de transformaciones **Narrow** (estrechas). Su regla principal asegura que: cada partición producida de cálculos derivan únicamente del input de la misma partición y nada más. Cada Worker transcurre operando su listado local a su ritmo individual libre de esperas sobre los estados de las particiones del resto.
 
 ---
 
