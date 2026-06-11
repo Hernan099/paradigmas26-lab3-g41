@@ -11,13 +11,13 @@
   Cada Worker toma sus asignaciones, abre la conexión a la URL externa (HTTP), descarga el contenido y decodifica localmente su propio documento JSON, aplanando los datos útiles para producir una secuencia de Posts.
 
 **Paso 3 — Extracción de entidades**
-  Cada Worker recorre el texto de sus Posts locales, consultando un diccionario auxiliar distribuido previamente ("broadcast"), en búsqueda de coincidencias limpiadas para arrojar una lista de menciones de Entidades.
+  Cada Worker recorre el texto de sus Posts locales, consultando un diccionario auxiliar, en búsqueda de coincidencias limpiadas para arrojar una lista de menciones de Entidades.
 
 **Paso 4 — Clasificación**
   Cada Worker reempaqueta cada mención de entidad asignándole un valor base de ocurrencia matemática, dejándola estandarizada mediante una clave primaria (`TipoDeEntidad, NombreDeLaEntidad`) lista para la fase de reducción.
 
 **Paso 5 — Conteo**
-  Los Workers entablan comunicación cruzada (Shuffle) por la red local del cluster para reagrupar todas las coincidencias atadas por la misma clave y reducir (sumar matemáticamente) sus contadores iterativamente hasta que el cluster concuerde los conteos unificados de cada entidad.
+  Los Workers entablan comunicación cruzada por la red local del cluster para reagrupar todas las coincidencias atadas por la misma clave y reducir sus contadores iterativamente hasta que el cluster concuerde los conteos unificados de cada entidad.
 
 **Paso 6 — Ranking**
   El Driver envía una orden terminal a los workers: se trae (recolecta) los contadores consolidados devueltos del Paso 5 e interrumpe el paralelismo, ordenándolos él mismo en su hilo principal de forma global para extraer las más repetidas a pantalla.
@@ -113,19 +113,19 @@ ________________________________________________________________________________
 
 #### ¿Por qué las barreras son necesarias?
 
-**El Paso de Conteo (Paso 5) es una barrera:** Spark invoca para la agrupación y suma una **Wide Dependency**; no se puede declarar contada en total a la entidad "Scala = 5 veces" usando un solo worker parcial, pues esa entidad bien podría ser el output disperso en N workers en otros servidores. Para sumarlos y contar, este paso bloqueante inicia **un Shuffle** por red, enviando todos los registros de la misma clave esparcidos dispersos para que aterricen en el mismo worker reductor que se encargará materialmente de sumarlo. El reductor no puede enviar respuesta sin estar totalmente seguro que todos terminaron de emitir sus extracciones.
+**El Paso de Conteo (Paso 5) es una barrera:** Spark invoca para la agrupación y suma una Wide Dependency; no se puede declarar contada en total a la entidad "Scala = 5 veces" usando un solo worker parcial, pues esa entidad bien podría ser el output disperso en N workers en otros servidores. Para sumarlos y contar, este paso bloqueante inicia un Shuffle por red, enviando todos los registros de la misma clave esparcidos dispersos para que aterricen en el mismo worker reductor que se encargará materialmente de sumarlo. El reductor no puede enviar respuesta sin estar totalmente seguro que todos terminaron de emitir sus extracciones.
 
 **El Paso de Ranking (Paso 6) es una barrera:** Como driver que dictamina fin de pipeline, recoger absolutos unificados mediante `collect` u ordenarlos globalmente de todo el cluster es una detención del ciclo paralelo para un retorno sincrónico y secuencial con el script en consola.
 
 #### ¿Por qué los demás pasos NO son barreras?
 
-Los pasos de **Descarga (2)**, **Extracción (3)**, y **Clasificación (4)** conforman el grupo de transformaciones **Narrow** (estrechas). Su regla principal asegura que: cada partición producida de cálculos derivan únicamente del input de la misma partición y nada más. Cada Worker transcurre operando su listado local a su ritmo individual libre de esperas sobre los estados de las particiones del resto.
+Los pasos de **Descarga (2)**, **Extracción (3)**, y **Clasificación (4)** conforman el grupo de transformaciones estrechas. Su regla principal asegura que: cada partición producida de cálculos derivan únicamente del input de la misma partición y nada más. Cada Worker transcurre operando su listado local a su ritmo individual libre de esperas sobre los estados de las particiones del resto.
 
 ---
 
 ### d_ Restricciones sobre las funciones de extensión en Spark
 
-En Spark, el mecanismo principal de extensión son las funciones que el desarrollador provee a operaciones como `map`, `flatMap`, `filter` y `reduceByKey`. Dado que estas funciones se definen en el programa principal pero se ejecutan en los nodos de cómputo (workers) de un entorno distribuido, Spark impone o asume ciertas restricciones críticas sobre ellas para garantizar un correcto funcionamiento:
+En Spark, el mecanismo principal de extensión son las funciones que el desarrollador provee a operaciones como `map`, `flatMap`, `filter` y `reduceByKey`. Dado que estas funciones se definen en el programa principal pero se ejecutan en los workers de un entorno distribuido, Spark impone o asume ciertas restricciones críticas sobre ellas para garantizar un correcto funcionamiento:
 
 1. **Serialización**:
    - **Restricción**: Toda la función (como closure) y cualquier variable de su entorno léxico que referencie internamente, debe ser serializable.
@@ -139,39 +139,142 @@ En Spark, el mecanismo principal de extensión son las funciones que el desarrol
    - **Restricción**: Las funciones pasadas a las transformaciones deberían tender a ser determinísticas e idempotentes (funciones "puras"), o si causan mutaciones externas (bases de datos, archivos), estas no deberían depender del número de veces que se las ejecute.
    - **Justificación**: Spark provee una robusta tolerancia a fallas. Cuando un worker falla o la red se desconecta antes de terminar su sección de procesamiento de datos, o incluso si Spark nota que un worker opera más lento que los demás (stragglers), Spark puede y va a **ejecutar de nuevo, reactivar o duplicar (especular)** ese trabajo fallido en otro worker. Ante ello, no hay garantía estricta de que tu transformación sobre un dato ejecute una única vez. Si una etapa produce resultados transaccionales, envía correos o debita dinero, un fallo provocaría que el correo se envíe en repetidas ocasiones en la repetición del bloque. Todo el trabajo final que interactúe puramente hacia el exterior se suele posponer a las Acciones de tipo volcado (`foreachPartition`) donde se emplean sentencias manejando la repetición y las transacciones idempotentemente y atómicamente.
 
+## Ejercicio 2:  Paralelizar la descarga de feeds
 
-## Ejercicio 4: Monitoreo del exito de las tareas
-
-### a_ ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline? ¿En qué situación un Accumulator puede dar un valor incorrecto?
-
-Porque cada worker modifica los acumuladores de a uno generando que si uno lo revisa durante la ejecucion quizas acceda a informacion que ya no se corresponde con el momento donde se realiza la accion logica o el valor obtenido no es el correcto para la accion que se quiere realizar. Por ejemplo si un dos workers a y b cuentan sus elementos bien parseados pero a es mas rapido que b. Entonces a al terminar por ejemplo a la mitad de la ejecucion de b llama la informacion guardada en el accumulator se encontraria con lo siguiente: #(bien parseados a) + #(bien parseados b)/2 Luego cuando b termine si llama la informacion encontraira #(bien parseados a) + #(bien parseados b) En este caso ni a ni b pueden asegurar que la informacion obtenida sea la correcta en el momento que se ejecutaron.
-### b_ ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
-Al final del pipeline es cuando spark recopila la informacion que hay en un accumulator y la entrega al driver para que pueda leerla.
-
-### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
+### Manejo de errores, ¿Que pasa si no implementamos los manejos de errores?
 
 
+1
+***
+Si un subscription no se puede parsear porque le falta el campo name o url, imprimir por cada una de ellas Warning: Skipping malformed subscription (missing 'name' or 'url' field)
+***
+
+Si no se implementa este manejo de errores, seria dificil de debuggearporque los errores imprimirian failed to download y no sabriamos por que
+
+
+2
+***
+Si no existe el archivo de suscripciones, imprimir Error: Could not load $filePath - file not found
+***
+
+se crashea el programa y falla la papeline
+3
+*** 
+Si no se puede parsear el archivo de suscripciones, imprimir Error: Could not load $filePath - invalid JSON format
+***
+
+se crashea el programa 
+
+4
+***
+Si no hay suscripciones para procesar, imprimir Error: No valid subscriptions found y salir del programa.
+***
+
+se procesarian 0 post sin saber porque 
+
+5
+*** 
+Si no existe el directorio de dictionary, "Error: entities directory '$entitiesDir' not found"
+***
+
+se crashea el programa
+
+6
+***
+Por cada archivo de entidad no encontrado o no leído correctamente, imprimir println(s"Warning: Could not load $entitiesDir/people.txt")
+***
+
+se hace trabajo para nada, un worker fallaria al final del analisis y todo lo anterior es trabajo que no sirve
+
+
+7
+***
+Si no se puede parsear un post de una suscripción, por cada uno imprimir "Warning: Failed to parse posts from '${subscription.name}' (${subscription.url})"
+***
+
+se crashea el programa
+
+8
+***
+Si no se puede hacer fetch de una url, "Warning: Failed to download from '${subscription.name}' (${subscription.url})"
+***
+
+el prgrama se puede crashear si una url es invalida
 
 ## Ejercicio 3: Paralelización del computo de entidades
 
 ### Barreras de sincronización
-   `reduceByKey constituye una barrera de sincronización porque Spark debe reunir todos los valores asociados a una misma clave para poder combinarlos. Durante este proceso los datos son redistribuidos entre los workers mediante un shuffle. Como Spark puede combinar los valores en distintos órdenes y en distintas particiones, la función utilizada debe ser asociativa y conmutativa. Estas propiedades garantizan que el resultado final sea correcto independientemente de cómo Spark distribuya y reorganice el trabajo entre los workers.
+`reduceByKey` constituye una barrera de sincronización porque Spark debe reunir todos los valores asociados a una misma clave para poder combinarlos. Durante este proceso los datos son redistribuidos entre los workers mediante un shuffle. Como Spark puede combinar los valores en distintos órdenes y en distintas particiones, la función utilizada debe ser asociativa y conmutativa. Estas propiedades garantizan que el resultado final sea correcto independientemente de cómo Spark distribuya y reorganice el trabajo entre los workers.
 
 ### Diccionario de entidades
-   El diccionario de entidades es serializado por Spark y distribuído a los workers para que puedan usarlo para clasificar y extraer entidades. Esto evita que cada worker deba cargar su propio diccionario desde 0.
+El diccionario de entidades es serializado por Spark y distribuído a los workers para que puedan usarlo para clasificar y extraer entidades. Esto evita que cada worker deba cargar su propio diccionario desde 0.
 
-   Ocurre aquí: \
-   `val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)`\
-   `val entidades = downloadResults.flatMap( post =>{`\
-   `val postCompleto = post.title + " " + post.selftext`\
-   `val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})`
+Ocurre aquí: \
+`val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)`\
+`val entidades = downloadResults.flatMap( post =>{`\
+`val postCompleto = post.title + " " + post.selftext`\
+`val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})`
+
+---
 
 ## Ejercicio 4: Monitoreo del exito de las tareas
 
 ### a_ ¿Por qué los Accumulators solo deben usarse para métricas y no para tomar decisiones lógicas dentro de las etapas distribuidas del pipeline? ¿En qué situación un Accumulator puede dar un valor incorrecto?
 
 Porque cada worker modifica los acumuladores de a uno generando que si uno lo revisa durante la ejecucion quizas acceda a informacion que ya no se corresponde con el momento donde se realiza la accion logica o el valor obtenido no es el correcto para la accion que se quiere realizar. Por ejemplo si un dos workers a y b cuentan sus elementos bien parseados pero a es mas rapido que b. Entonces a al terminar por ejemplo a la mitad de la ejecucion de b llama la informacion guardada en el accumulator se encontraria con lo siguiente: #(bien parseados a) + #(bien parseados b)/2 Luego cuando b termine si llama la informacion encontraira #(bien parseados a) + #(bien parseados b) En este caso ni a ni b pueden asegurar que la informacion obtenida sea la correcta en el momento que se ejecutaron.
+
 ### b_ ¿En qué momento del pipeline está disponible el valor de un Accumulator para ser leído por el driver?
 Al final del pipeline es cuando spark recopila la informacion que hay en un accumulator y la entrega al driver para que pueda leerla.
 
 ### c_ Comparen el tiempo que tarda cada etapa del pipeline que midieron en la versión no paralelizada y la versión con Spark. ¿Qué conclusiones pueden sacar? Para la cantidad de datos que estamos trabajando, ¿se aprecia la diferencia? Justifique por qué. Nota: La comparación debe realizarse en ejecuciones sobre la misma computadora y la misma conexión a internet.
+
+_Las siguientes ejecuciones se realizaron en la computadora de Hernan Pereyra sobre la version del proyecto usando el reddit-mock_
+
+#### Version sin accumulators de spark:
+========== ESTADÍSTICAS DE PROCESAMIENTO ==========
+Feeds descargados exitosamente: 4
+Feeds fallidos: 0
+Posts descargados exitosamente: 100
+Posts fallidos: -96
+Posts filtrados (vacíos/nulos): 38
+Largo promedio en posts: 1110
+
+#### Version con accumulators de spark:
+========== ESTADÍSTICAS DE PROCESAMIENTO ==========
+Feeds descargados exitosamente: 36
+Feeds fallidos: 0
+Posts descargados exitosamente: 24
+Posts fallidos: 0
+Posts filtrados (vacíos/nulos): 0
+Largo promedio en posts: 1110
+
+#### Conclusiones
+
+Al ejecutar la recoleccion de las estadisticas dentro de los mismos workers los calculos no realizan bien la concurrencia dando numeros extraños. Por ejemplo puede verse que dice que se descargaron 4 feeds mientras que en la version con spark aparecen 36 feeds. La diferencia es que al igual que la logica map/reduce al usar accumulators la paralelizacion de cuentas es mas segura evitando que ocurran condiciones de carrera que es lo que debe estar ocurriendo en la version sin ellos.
+Asi la logica es generar accumulator -> guardar informacion en el -> terminar la ejecucion del pipe -> acceder a la informacion desde el driver. Evita no solo las condiciones de carrera y valores incorrectos. Sino tambien evita romper la abstraccion del framework.
+
+---
+
+## Ejercicio 5: Acceso a datos y estadísticas del resultado
+
+### a_ Recomputaciones innecesarias y la falta de cache()
+
+**Puntos del código donde se recomputa innecesariamente:**
+Se recomputa un esfuerzo distribuido de forma innecesaria cada vez que disparamos acciones terminales como `.count()`, `.isEmpty()` o `.collect()` sobre los tres RDDs troncales principales (`subscriptions`, `downloadResults`, y `filteredPosts`) con tal de obtener valores aislados de métricas a imprimir (como sumar variables aisladas por error tales como `postsFailed`, `filteredPosts` o `feedsSuccess` restando y pidiendo un conteo a la vez). Al no indicar retención explícita en RAM (cache), Spark libera el bloque procesado y el pipeline olvida el cálculo anterior por cada línea que se ejecuta luego.
+
+**¿Qué ocurriría si no llamaran a cache()?**
+Debido al diseño base de Apache Spark donde las transformaciones son *perezosas* (Lazy Evaluation), si no se invoca la persistencia `cache()` sobre un RDD, Spark no resguardará la respuesta temporal. Por consiguiente, ante cada invocación de Acción aguas abajo que requiera del pipeline, el manejador desechará cualquier milagro de velocidad y reconstruirá el DAG por rigor volviendo todo su linaje hacia atrás. Esto provoca rehacer a repetición el recorrido base en los drivers (`sc.parallelize()`), incluyendo gatillar otra docenas de aperturas remotas HTTP para volver a pedir y decodificar los mismos portales a Reddit infinitas veces.
+
+**¿Cuántas veces se ejecutaría la descarga de feeds?**
+La descarga se activa a partir del método asociado sobre el `downloadResults`, y esta dependencia es heredada en cascada atando permanentemente a `filteredPosts` y a `allEntities`. 
+Ewntonces tendríamos:
+1. `val postsSuccess = downloadResults.count()` -> **(1ra descarga en todos los workers)**
+2. `val postsFailed = [...] - downloadResults.count()` -> **(2da descarga...)**
+3. `val postsFiltered = downloadResults.count() - filteredPosts.count()` -> **(3ra y 4ta doble descarga separada resuelta dentro de las restas secuenciales del mismo print)**
+4. `if (!filteredPosts.isEmpty())` -> **(5ta descarga por gatillo oculto `take`)**
+5. `totalChars.reduce(_+_)` -> **(6ta descarga de reducción total)**
+6. `filteredPosts.count()` -> **(7ma descarga repetición)**
+7. `if (filteredPosts.isEmpty)` -> **(8va descarga repetición por comprobación)**
+8. `val allEntitiesRDD = allEntities.collect()` -> **(9na descarga final exigida por el Driver)**
+
+Se realizaría la descarga de feeds **9 veces** en total, lo cual es un desperdicio de recursos y tiempo. Ñao, ñao, no podemos permitirnos esto.

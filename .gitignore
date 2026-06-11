@@ -1,0 +1,16 @@
+
+reddit-mock/
+hello_world/
+.metals/
+laboratorio/data/._*
+laboratorio/data/valid_entities/._*
+**/target/
+
+.metals/
+.bsp/
+.idea/
+
+**/target/
+
+.DS_Store
+._*
