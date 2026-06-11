@@ -113,8 +113,8 @@ object Main {
     println(Formatters.formatTypeStats(typeStats))
     println()
     println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
-  }
-  //EJERCICIO 3
+
+      //EJERCICIO 3
 
   //Encuentro las entidades y genero un nuevo RDD con las entidades completas, es decir, titulo + texto
   //val entidades = downloadResults.flatMap( post => 
@@ -123,28 +123,31 @@ object Main {
   //  //Generamos un RDD[NamedEntity]
   //  Analyzer.downloadResults(postCompleto,dictionary))
   
-}
 
-  val entidades = downloadResults.flatMap( post =>{
+  val entidades = downloadResults.flatMap(post =>{
     val postCompleto = post.title + " " + post.selftext
 
     //Generamos un RDD[NamedEntity]
-    val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)})
+    val parsedPost = Analyzer.detectEntities(postCompleto,dictionary)
+    parsedPost })
   
   //Convertimos cada NamedEntity en un mapeo ((tipo,name) 1) para agrupar y sumar luego
   val mapedPost = entidades.map( post => ((post.entityType, post.text), 1))
 
-  //Sumamos el 1 de ada entidad mapeada agrupando por tipo
+  //Sumamos el 1 de cada entidad mapeada agrupando por tipo
   val entityCount = mapedPost.reduceByKey( _ + _)
 
 
   // RDD[(tipo,nombre), cantidad]
-  val orderEntity = entityCount.sortBy(e => (e._2, e._1._1), false)
+  val orderEntity = entityCount.sortBy{
+  case ((entityType, entityName), count) =>
+    (-count, entityType, entityName)
+}
 
-  println(Formatters.formatEntityStats(orderEntity))
+  println(Formatters.formatEntityStats(orderEntity.collect().toMap))
 
   //FIN EJERCICIO 3
+  }
 
 
-  
 }
