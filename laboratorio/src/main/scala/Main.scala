@@ -80,12 +80,14 @@ object Main {
     // ERROR HANDLING: Validar que hay suscripciones válidas
     if (feedsSuccess == 0) {
       println("Error: No valid subscriptions found")
+      subscriptions.unpersist()
       return
     }
     // Flatten all posts and count JSON parse failures
     //borramos una variable que guardaba un map con otodos los post, que ya o nescesitamos, y cambiamos todo para poder sacar lo que necesita
     val postsSuccess = downloadResults.count() 
     val postsFailed = subscriptions.count() - downloadResults.count()
+    subscriptions.unpersist() // No se usa más a partir de aquí
     
     // Filter empty posts
     val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty).cache()
@@ -116,6 +118,8 @@ object Main {
     // Check if we have any posts to process
     if (filteredPosts.isEmpty) {
       println("Error: No valid posts downloaded after filtering")
+      downloadResults.unpersist()
+      filteredPosts.unpersist()
       return
     }
 
@@ -123,6 +127,8 @@ object Main {
     val entitiesDir = new File(cmdArgs.entitiesDir)
     if (!entitiesDir.exists() || !entitiesDir.isDirectory) {
       println(s"Error: entities directory '${cmdArgs.entitiesDir}' not found")
+      downloadResults.unpersist()
+      filteredPosts.unpersist()
       return
     }
     val dictionary = Dictionary.loadAll(cmdArgs.entitiesDir)
@@ -133,6 +139,7 @@ object Main {
       Analyzer.detectEntities(combinedText, dictionary)
     }
     val allEntitiesRDD = allEntities.collect().toList
+    filteredPosts.unpersist()
 
     // Count entities
     val entityCounts = Analyzer.countEntities(allEntitiesRDD)
@@ -174,6 +181,7 @@ object Main {
 
   println(Formatters.formatEntityStats(orderEntity.collect().toMap))
 
+  downloadResults.unpersist()
   //FIN EJERCICIO 3
   }
 
