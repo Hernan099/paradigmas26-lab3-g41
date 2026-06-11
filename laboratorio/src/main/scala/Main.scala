@@ -67,7 +67,7 @@ object Main {
             failPostAcum.add(1)
             Iterator.empty
           } else {
-            postAcum.add(1)
+            postAcum.add(posts.size)
             posts.iterator
           }
       }
@@ -90,7 +90,15 @@ object Main {
     subscriptions.unpersist() // No se usa más a partir de aquí
     
     // Filter empty posts
-    val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty).cache()
+    val filterPostAcum = sc.longAccumulator("posts filtrados")
+    val filteredPosts: RDD[Post] = downloadResults.filter(post => 
+      if(post.title.nonEmpty && post.selftext.nonEmpty){
+        filterPostAcum.add(1)
+        true
+      } else {
+        false
+      }
+      ).cache()
     val postsFiltered = downloadResults.count() - filteredPosts.count()
 
     // Calculate average characters in filtered posts
@@ -107,7 +115,7 @@ object Main {
       "feedsFailed" -> failFeedAcum.value.toInt,
       "postsSuccess" -> postAcum.value.toInt,
       "postsFailed" -> failPostAcum.value.toInt,
-      "postsFiltered" -> failPostAcum.value.toInt,
+      "postsFiltered" -> filterPostAcum.value.toInt,
       "avgChars" -> charsAcum.value.toInt
     )
 
@@ -146,9 +154,7 @@ object Main {
     val entityCounts = Analyzer.countEntities(allEntitiesRDD)
     val typeStats = Analyzer.countByType(allEntitiesRDD)
 
-    println(Formatters.formatTypeStats(typeStats))
-    println()
-    println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
+    //println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
 
       //EJERCICIO 3
 
@@ -173,6 +179,8 @@ object Main {
   }
   
 
+    println(Formatters.formatTypeStats(typeStats))
+    println()
   println(Formatters.formatEntityStats(orderEntity.collect().toMap))
 
   downloadResults.unpersist()
