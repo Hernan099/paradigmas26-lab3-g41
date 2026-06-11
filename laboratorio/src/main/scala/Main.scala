@@ -141,7 +141,7 @@ object Main {
     }
     val allEntitiesRDD = allEntities.collect().toList
     filteredPosts.unpersist()
-
+  
     // Count entities
     val entityCounts = Analyzer.countEntities(allEntitiesRDD)
     val typeStats = Analyzer.countByType(allEntitiesRDD)
@@ -151,14 +151,6 @@ object Main {
     println(Formatters.formatEntityStats(entityCounts, cmdArgs.topK))
 
       //EJERCICIO 3
-
-  //Encuentro las entidades y genero un nuevo RDD con las entidades completas, es decir, titulo + texto
-  //val entidades = downloadResults.flatMap( post => 
-  //  val postCompleto = post.title + " " + post.selftext
-  //
-  //  //Generamos un RDD[NamedEntity]
-  //  Analyzer.downloadResults(postCompleto,dictionary))
-  
 
   val entidades = downloadResults.flatMap(post =>{
     val postCompleto = post.title + " " + post.selftext
@@ -178,7 +170,8 @@ object Main {
   val orderEntity = entityCount.sortBy{
   case ((entityType, entityName), count) =>
     (-count, entityType, entityName)
-}
+  }
+  
 
   println(Formatters.formatEntityStats(orderEntity.collect().toMap))
 
