@@ -85,3 +85,24 @@ Cuando usas variables locales e integras un contador como `var counter = 0; rdd.
 **Qué deberías entender teóricamente:** La cualidad de Resiliencia a las fallas (Tolerenacia a Fallas y Linaje).
 El framework existe para la escalabilidad: asume por fondo que con cientos de computadores, alguna PC o conexión siempre va a fallar antes de tener el proceso terminado. Si el Worker 3 se quema por la mitad de un `map`, Spark no tumba toda tu Big Data. Retoma de su Lineage (su plan de pasos guardado en memoria) y ordena repetir y regenerar a Worker 4 lo que Worker 3 iba logrando. Más allá del daño, cuenta con que si Worker 1 avanza lento, enciende un proceso idéntico especulativo a procesar junto a la par a ver cuál llega más rápido y descartará un avance idéntico al otro. 
 **Cómo resolverlo:** Asumiendo que tu función base, ej: `map(x => notificarUsuarioPorMail(x))`, en casos normales de hardware dañado un fragmento de tu mapeo fue procesado 1,5 o incluso tres veces por un nodo, se enviaron tres correos repitiendo y duplicando los problemas para tus clientes. Ante ello, la restricción final a concluir es que las extensiones deben abstenerse estrictamente a ser **Puramente Idempotentes** en acciones a ser tomadas sin sufrir cambios (es decir una función "pura" donde procesar una o tres veces conllevan el mismo resultado en vez del crecimiento constante). No deberías causar efectos desde transformaciones, sólo al final, en bloques dedicados de salida cuidando atomicidades.
+
+---
+
+# Explicación paso a paso — Ejercicio 5b: Optimización con Persistencia
+
+## Identificación de Re-cómputos
+Spark es *lazy* por naturaleza. Esto significa que cuando definimos un RDD (como `downloadResults`), Spark no hace nada hasta que llamamos a una **Acción** (como `.count()` o `.collect()`). 
+
+El problema surge cuando llamamos a múltiples acciones sobre el mismo RDD. Sin persistencia, Spark vuelve a ejecutar todo el "linaje" (la cadena de pasos) desde el principio para cada acción. En nuestro caso, esto es críticamente ineficiente porque:
+1. **`subscriptions`**: Se usa 3 veces para contar éxitos y fallos. Aunque es un RDD pequeño, re-leerlo o re-paralelizarlo es trabajo extra innecesario.
+2. **`downloadResults`**: ¡ESTE ES EL PUNTO CRÍTICO! Este RDD involucra llamadas de red (`downloadFeed`). Se usa en 5 puntos distintos. Sin `.cache()`, ¡estaríamos bajando los mismos feeds de Reddit 5 veces seguidas! 
+3. **`filteredPosts`**: Se usa 5 veces (para conteos, cálculo de promedio de caracteres, verificar si está vacío y finalmente extraer entidades). Cada vez que lo usamos, si no estuviera cacheado, Spark tendría que filtrar de nuevo los resultados descargados.
+
+## Solución aplicada: Uso de `.cache()`
+He aplicado `.cache()` inmediatamente después de la definición de estos tres RDDs:
+
+- **`subscriptions.cache()`**: Asegura que la lista de suscripciones parseada se mantenga en memoria para los distintos conteos iniciales.
+- **`downloadResults.cache()`**: Fundamental. La primera vez que se ejecute una acción (ej: `downloadResults.count()`), Spark descargará los feeds y guardará los objetos `Post` en la memoria RAM de los workers. Las siguientes 4 veces que se use, Spark leerá los posts directamente de la memoria, ahorrando todo el tráfico de red y el parseo JSON.
+- **`filteredPosts.cache()`**: Almacena el subconjunto de posts válidos. Dado que se atraviesa varias veces para estadísticas y procesamiento NER, tenerlo ya filtrado y listo en memoria acelera drásticamente la etapa final del pipeline.
+
+**Nota conceptual:** `.cache()` es equivalente a `.persist(StorageLevel.MEMORY_ONLY)`. Como estamos trabajando en modo local con datasets que entran cómodamente en la RAM, esta es la opción más rápida.

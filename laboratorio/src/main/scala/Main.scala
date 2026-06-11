@@ -45,7 +45,7 @@ object Main {
           Iterator(s)
         }
       case None => Iterator.empty
-    }
+    }.cache()
 
     // Download feeds and parse posts, tracking success/failure , como lo estamos paralelizando con flatmap, lo que hacemos es:
     //para cada subscripcion, la descargamos, luego, si esta no tiene nada, ponemos iterador.empty, si si tiene algo, sumamos
@@ -71,7 +71,7 @@ object Main {
             posts.iterator
           }
       }
-    }
+    }.cache()
 
     // Count feed successes/failures lo hacemos con lo que tenemos
     val feedsSuccess = subscriptions.count()
@@ -88,7 +88,7 @@ object Main {
     val postsFailed = subscriptions.count() - downloadResults.count()
     
     // Filter empty posts
-    val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty)
+    val filteredPosts: RDD[Post] = downloadResults.filter(post => post.title.nonEmpty && post.selftext.nonEmpty).cache()
     val postsFiltered = downloadResults.count() - filteredPosts.count()
 
     // Calculate average characters in filtered posts
