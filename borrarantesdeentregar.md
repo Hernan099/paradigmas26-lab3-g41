@@ -106,3 +106,31 @@ He aplicado `.cache()` inmediatamente después de la definición de estos tres R
 - **`filteredPosts.cache()`**: Almacena el subconjunto de posts válidos. Dado que se atraviesa varias veces para estadísticas y procesamiento NER, tenerlo ya filtrado y listo en memoria acelera drásticamente la etapa final del pipeline.
 
 **Nota conceptual:** `.cache()` es equivalente a `.persist(StorageLevel.MEMORY_ONLY)`. Como estamos trabajando en modo local con datasets que entran cómodamente en la RAM, esta es la opción más rápida.
+
+---
+
+# Explicación paso a paso — Ejercicio 5c: Gestión de Memoria con unpersist()
+
+## Liberación Progresiva de Recursos
+Tan importante como persistir los datos es liberarlos cuando ya no son necesarios, especialmente en entornos con recursos limitados. El método `.unpersist()` le indica a Spark que puede eliminar los datos de la memoria RAM de los workers.
+
+He implementado la liberación de memoria en los siguientes puntos estratégicos:
+
+1.  **`subscriptions.unpersist()`**: 
+    *   **Cuándo**: Tan pronto como terminamos de contar los posts descargados (`postsFailed`).
+    *   **Por qué**: En este punto del programa, ya tenemos los posts en `downloadResults` (que está cacheado). Ya no necesitamos volver a las URLs originales de las suscripciones.
+
+2.  **`filteredPosts.unpersist()`**:
+    *   **Cuándo**: Inmediatamente después de llamar a `.collect()` para obtener la lista de entidades en el driver (`allEntitiesRDD`).
+    *   **Por qué**: Una vez que los datos han sido procesados y traídos al driver como objetos locales de Scala, el RDD en el cluster ya no cumple ninguna función.
+
+3.  **`downloadResults.unpersist()`**:
+    *   **Cuándo**: Al final de todo el procesamiento, después de la última acción del Ejercicio 3.
+    *   **Por qué**: Se mantiene hasta el final porque el segundo bloque de análisis de entidades (implementado enteramente con RDDs) depende de él.
+
+## Manejo de Casos de Error
+El requerimiento 5c hace énfasis en los casos de error. He añadido llamadas a `.unpersist()` en todos los puntos de salida prematura (`return`):
+- Si no hay suscripciones válidas, liberamos `subscriptions`.
+- Si no se bajaron posts válidos o si el directorio de entidades no existe, liberamos tanto `downloadResults` como `filteredPosts`.
+
+Esto asegura que, independientemente de si el programa termina con éxito o por un error, no dejamos "basura" ocupando memoria en el cluster/sesión de Spark.
