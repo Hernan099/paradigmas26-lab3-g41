@@ -1,8 +1,16 @@
-project/*
-reddit-mock/*
-hello_world/*
 
+reddit-mock/
+hello_world/
+.metals/
 laboratorio/data/._*
 laboratorio/data/valid_entities/._*
-laboratorio/project/*
-laboratorio/target/*
+**/target/
+
+.metals/
+.bsp/
+.idea/
+
+**/target/
+
+.DS_Store
+._*
