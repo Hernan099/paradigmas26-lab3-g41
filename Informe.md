@@ -266,15 +266,16 @@ Se recomputa un esfuerzo distribuido de forma innecesaria cada vez que disparamo
 Debido al diseño base de Apache Spark donde las transformaciones son *perezosas* (Lazy Evaluation), si no se invoca la persistencia `cache()` sobre un RDD, Spark no resguardará la respuesta temporal. Por consiguiente, ante cada invocación de Acción aguas abajo que requiera del pipeline, el manejador desechará cualquier milagro de velocidad y reconstruirá el DAG por rigor volviendo todo su linaje hacia atrás. Esto provoca rehacer a repetición el recorrido base en los drivers (`sc.parallelize()`), incluyendo gatillar otra docenas de aperturas remotas HTTP para volver a pedir y decodificar los mismos portales a Reddit infinitas veces.
 
 **¿Cuántas veces se ejecutaría la descarga de feeds?**
-La descarga se activa a partir del método asociado sobre el `downloadResults`, y esta dependencia es heredada en cascada atando permanentemente a `filteredPosts` y a `allEntities`. 
-Ewntonces tendríamos:
+La descarga se activa a partir del método asociado sobre el `downloadResults`, y esta dependencia es heredada en cascada hacia `filteredPosts` y `allEntities`. 
+Entonces tendríamos:
 1. `val postsSuccess = downloadResults.count()` -> **(1ra descarga en todos los workers)**
-2. `val postsFailed = [...] - downloadResults.count()` -> **(2da descarga...)**
-3. `val postsFiltered = downloadResults.count() - filteredPosts.count()` -> **(3ra y 4ta doble descarga separada resuelta dentro de las restas secuenciales del mismo print)**
-4. `if (!filteredPosts.isEmpty())` -> **(5ta descarga por gatillo oculto `take`)**
-5. `totalChars.reduce(_+_)` -> **(6ta descarga de reducción total)**
-6. `filteredPosts.count()` -> **(7ma descarga repetición)**
-7. `if (filteredPosts.isEmpty)` -> **(8va descarga repetición por comprobación)**
-8. `val allEntitiesRDD = allEntities.collect()` -> **(9na descarga final exigida por el Driver)**
+2. `val postsFailed = [...] - downloadResults.count()` -> **(2da descarga)**
+3. `val postsFiltered = downloadResults.count() - [...]` -> **(3ra descarga)**
+4. `[...] - filteredPosts.count()` -> **(4ta descarga)**
+5. `val kept = filteredPosts.count()` -> **(5ta descarga)**
+6. `totalChars = filteredPosts.map(...).reduce(_ + _)` -> **(6ta descarga)**
+7. `if (filteredPosts.isEmpty)` -> **(7ma descarga)**
+8. `val allEntitiesRDD = allEntities.collect()` -> **(8va descarga)**
+9. `orderEntity.collect().toMap` (en el print final) -> **(9na descarga final)**
 
-Se realizaría la descarga de feeds **9 veces** en total, lo cual es un desperdicio de recursos y tiempo. Ñao, ñao, no podemos permitirnos esto.
+Se realizaría la descarga de feeds **9 veces** en total, lo cual es un desperdicio masivo de recursos y tiempo.
