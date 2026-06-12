@@ -158,6 +158,7 @@ Si no existe el archivo de suscripciones, imprimir Error: Could not load $filePa
 ***
 
 se crashea el programa y falla la papeline
+
 3
 *** 
 Si no se puede parsear el archivo de suscripciones, imprimir Error: Could not load $filePath - invalid JSON format
@@ -199,7 +200,7 @@ se crashea el programa
 Si no se puede hacer fetch de una url, "Warning: Failed to download from '${subscription.name}' (${subscription.url})"
 ***
 
-el prgrama se puede crashear si una url es invalida
+el programa se puede crashear si una url es invalida
 
 ## Ejercicio 3: Paralelización del computo de entidades
 
