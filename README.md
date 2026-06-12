@@ -21,6 +21,25 @@ The system combines functional and object-oriented programming paradigms:
 1. Clone or extract the project
 2. No additional dependencies need manual installation—sbt will download them automatically on first build
 
+## para ejecutar:
+
+### con reddit remoto( o reddit normal )
+
+```bash
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 PATH="$JAVA_HOME/bin:$PATH" SBT_OPTS="--add-exports=java.base/sun.nio.ch=ALL-UNNAMED" sbt run
+```
+
+### con reddit-mock simulando servidor local
+
+Abrir la terminal parado sobre la carpeta "reddit-mock" y ejecutar:
+```bash
+sbt compile
+```
+En otra terminal parado sobre "laboratorio" ejecutar:
+```bash
+JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 PATH="$JAVA_HOME/bin:$PATH" SBT_OPTS="--add-exports=java.base/sun.nio.ch=ALL-UNNAMED" sbt "run --subscription-file data/local_subscriptions.json"
+```
+
 ## Building
 
 ```bash
